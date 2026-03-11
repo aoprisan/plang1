@@ -71,9 +71,15 @@ export class TypeChecker {
     types.set("Char", CHAR);
     types.set("Str", STR);
     types.set("Void", VOID);
+    types.set("Any", ANY);
+
+    const variables = new Map<string, Type>();
+    // Built-in Option constructors
+    variables.set("Some", { tag: "function", params: [ANY], returnType: { tag: "option", innerType: ANY }, effects: [] });
+    variables.set("None", { tag: "option", innerType: ANY });
 
     this.globalEnv = {
-      variables: new Map(),
+      variables,
       types,
       traits: new Map(),
       inAsync: false,

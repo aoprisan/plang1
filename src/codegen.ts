@@ -80,6 +80,9 @@ export class CodeGenerator {
     this.emit("function __err(error) { return { __tag: 'Err', error }; }");
     this.emit("function __some(value) { return { __tag: 'Some', value }; }");
     this.emit("const __none = { __tag: 'None' };");
+    this.emit("function __wrapOption(val) { return (val == null) ? __none : __some(val); }");
+    this.emit("const Some = __some;");
+    this.emit("const None = __none;");
     this.emit("");
     this.emit("function __propagate(result) {");
     this.emit("  if (result && result.__tag === 'Err') throw new __PLangError('propagate', result.error);");
@@ -243,6 +246,7 @@ export class CodeGenerator {
     // Global convenience
     this.emit("const println = std.io.println;");
     this.emit("const math = std.math;");
+    this.emit("const to_option = __wrapOption;");
     this.emit("");
   }
 
@@ -355,10 +359,16 @@ export class CodeGenerator {
     this.emit("}");
   }
 
+  private isOptionReturn(returnType?: AST.TypeExpr): boolean {
+    return !!returnType && returnType.kind === "NamedType" && returnType.name === "Option";
+  }
+
   private emitExternFnDecl(decl: AST.ExternFnDecl): void {
     const params = decl.params.map(p => p.name).join(", ");
     const asyncPrefix = decl.isAsync ? "async " : "";
-    this.emit(`const ${decl.name} = ${asyncPrefix}(${params}) => ${decl.jsBinding}(${params});`);
+    const call = `${decl.jsBinding}(${params})`;
+    const body = this.isOptionReturn(decl.returnType) ? `__wrapOption(${call})` : call;
+    this.emit(`const ${decl.name} = ${asyncPrefix}(${params}) => ${body};`);
     if (decl.isPublic) {
       this.emit(`module.exports.${decl.name} = ${decl.name};`);
     }
@@ -382,7 +392,9 @@ export class CodeGenerator {
       } else {
         jsFn = `__mod.${method.name}`;
       }
-      this.emit(`${method.name}: ${asyncPrefix}(${params}) => ${jsFn}(${params}),`);
+      const call = `${jsFn}(${params})`;
+      const body = this.isOptionReturn(method.returnType) ? `__wrapOption(${call})` : call;
+      this.emit(`${method.name}: ${asyncPrefix}(${params}) => ${body},`);
     }
     this.indent--;
     this.emit(`};`);

@@ -1,5 +1,5 @@
 // SQLite Demo — Shows FFI with better-sqlite3
-// Demonstrates database CRUD operations in PLang
+// Demonstrates Option<T> for safe nullable result handling
 //
 // To run:
 //   npm install better-sqlite3
@@ -11,7 +11,6 @@ module sqlite_demo;
 // === FFI: SQLite bindings ===
 
 extern module "better-sqlite3" as Database {
-  // The module export itself is the constructor
   fn create(path: Str) -> Any = "default";
 }
 
@@ -32,8 +31,9 @@ fn insert_user(db: Any, name: Str, email: Str, age: Int) -> Any {
   db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)").run(name, email, age)
 }
 
-fn find_user_by_email(db: Any, email: Str) -> Any {
-  db.prepare("SELECT * FROM users WHERE email = ?").get(email)
+// Returns Option — .get() returns null when no row matches
+fn find_user_by_email(db: Any, email: Str) -> Option<Any> {
+  to_option(db.prepare("SELECT * FROM users WHERE email = ?").get(email))
 }
 
 fn all_users(db: Any) -> Any {
@@ -57,7 +57,7 @@ fn count_users(db: Any) -> Int {
   row.count
 }
 
-// === Transaction example ===
+// === Seed data ===
 
 fn seed_users(db: Any) -> Void {
   let insert = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
@@ -72,15 +72,12 @@ fn seed_users(db: Any) -> Void {
 // === Main ===
 
 fn main() -> Void {
-  // In-memory database for demo (use a file path for persistence)
   let db = Database.create(":memory:");
   create_schema(db);
 
-  // Insert users
   println("Inserting users...");
   seed_users(db);
 
-  // Count
   let total = count_users(db);
   println("Total users: " ++ total);
 
@@ -98,20 +95,29 @@ fn main() -> Void {
     println("  " ++ user.name ++ " — age " ++ user.age);
   };
 
-  // Find specific user
+  // Find user with Option<T> — safe nullable handling
   println("\nLooking up bob@example.com...");
-  let bob = find_user_by_email(db, "bob@example.com");
-  println("  Found: " ++ bob.name ++ ", age " ++ bob.age);
+  match find_user_by_email(db, "bob@example.com") {
+    Some { value } => println("  Found: " ++ value.name ++ ", age " ++ value.age),
+    None => println("  Not found!"),
+  };
 
   // Update
   println("\nUpdating Bob's age to 26...");
   update_user_age(db, "bob@example.com", 26);
-  let updated_bob = find_user_by_email(db, "bob@example.com");
-  println("  Bob's new age: " ++ updated_bob.age);
+  match find_user_by_email(db, "bob@example.com") {
+    Some { value } => println("  Bob's new age: " ++ value.age),
+    None => println("  Bob disappeared!"),
+  };
 
-  // Delete
+  // Delete + verify gone
   println("\nDeleting Eve...");
   delete_user(db, "eve@example.com");
+  match find_user_by_email(db, "eve@example.com") {
+    Some { value } => println("  Eve still here??"),
+    None => println("  Confirmed: Eve deleted"),
+  };
+
   let remaining = count_users(db);
   println("  Remaining users: " ++ remaining);
 

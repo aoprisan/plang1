@@ -1,5 +1,6 @@
 // Todo API — A REST web app with SQLite storage
 // Demonstrates PLang FFI with Express.js and better-sqlite3
+// Uses Option<T> to handle nullable database results safely
 //
 // To run:
 //   npm install express better-sqlite3
@@ -17,16 +18,12 @@ module todo_api;
 // === FFI: External JavaScript bindings ===
 
 extern module "express" as express_mod {
-  // express() creates an app; the module itself is the callable
   fn create() -> Any = "default";
 }
 
 extern module "better-sqlite3" as sqlite_mod {
-  // better-sqlite3 exports a constructor directly
   fn open(path: Str) -> Any = "default";
 }
-
-extern fn json_stringify(obj: Any) -> Str = "JSON.stringify";
 
 // === Database Layer ===
 
@@ -42,18 +39,19 @@ fn get_all_todos(db: Any) -> Any {
   db.prepare("SELECT id, title, done FROM todos ORDER BY id").all()
 }
 
-fn get_todo(db: Any, id: Int) -> Any {
-  db.prepare("SELECT id, title, done FROM todos WHERE id = ?").get(id)
+// Returns Option — SQLite .get() returns null when no row found
+fn find_todo(db: Any, id: Int) -> Option<Any> {
+  to_option(db.prepare("SELECT id, title, done FROM todos WHERE id = ?").get(id))
 }
 
 fn create_todo(db: Any, title: Str) -> Any {
   let result = db.prepare("INSERT INTO todos (title) VALUES (?)").run(title);
-  get_todo(db, result.lastInsertRowid)
+  db.prepare("SELECT * FROM todos WHERE id = ?").get(result.lastInsertRowid)
 }
 
 fn update_todo(db: Any, id: Int, title: Str, done: Bool) -> Any {
   db.prepare("UPDATE todos SET title = ?, done = ? WHERE id = ?").run(title, done, id);
-  get_todo(db, id)
+  db.prepare("SELECT * FROM todos WHERE id = ?").get(id)
 }
 
 fn delete_todo(db: Any, id: Int) -> Void {
@@ -63,7 +61,6 @@ fn delete_todo(db: Any, id: Int) -> Void {
 // === HTTP Routes ===
 
 fn setup_routes(app: Any, db: Any) -> Void {
-  // Middleware: parse JSON bodies
   app.use(express_mod.create.json());
 
   // GET /todos — list all
@@ -72,14 +69,12 @@ fn setup_routes(app: Any, db: Any) -> Void {
     res.json(todos);
   });
 
-  // GET /todos/:id — get one
+  // GET /todos/:id — get one, with Option handling
   app.get("/todos/:id", |req: Any, res: Any| {
     let id = req.params.id;
-    let todo = get_todo(db, id);
-    if todo == null {
-      res.status(404).json({ error: "Todo not found" });
-    } else {
-      res.json(todo);
+    match find_todo(db, id) {
+      Some { value } => res.json(value),
+      None => res.status(404).json({ error: "Todo not found" }),
     };
   });
 
@@ -126,7 +121,7 @@ fn main() -> Void {
     println("");
     println("  GET    /todos       — list all");
     println("  POST   /todos       — create");
-    println("  GET    /todos/:id   — get one");
+    println("  GET    /todos/:id   — get one (returns 404 via Option)");
     println("  PUT    /todos/:id   — update");
     println("  DELETE /todos/:id   — delete");
   });
