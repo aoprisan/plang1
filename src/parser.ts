@@ -560,8 +560,12 @@ export class Parser {
     this.expect(TokenType.RParen);
 
     let returnType: AST.TypeExpr | undefined;
+    let effects: AST.TypeExpr[] = [];
     if (this.match(TokenType.Arrow)) {
       returnType = this.parseTypeExpr();
+      if (this.match(TokenType.Bang)) {
+        effects = this.parseEffectTypes();
+      }
     }
 
     this.expect(TokenType.Eq);
@@ -570,7 +574,7 @@ export class Parser {
 
     return {
       kind: "ExternFnDecl", name, isPublic, isAsync, params, returnType,
-      jsBinding, span: this.spanFrom(start),
+      effects, jsBinding, span: this.spanFrom(start),
     };
   }
 
@@ -598,8 +602,12 @@ export class Parser {
       this.expect(TokenType.RParen);
 
       let returnType: AST.TypeExpr | undefined;
+      let effects: AST.TypeExpr[] = [];
       if (this.match(TokenType.Arrow)) {
         returnType = this.parseTypeExpr();
+        if (this.match(TokenType.Bang)) {
+          effects = this.parseEffectTypes();
+        }
       }
 
       // Optional JS binding override: = "customName"
@@ -611,7 +619,7 @@ export class Parser {
 
       methods.push({
         kind: "ExternFnDecl", name: methodName, isPublic: false, isAsync, params,
-        returnType, jsBinding, span: this.spanFrom(methodStart),
+        returnType, effects, jsBinding, span: this.spanFrom(methodStart),
       });
     }
     this.expect(TokenType.RBrace);

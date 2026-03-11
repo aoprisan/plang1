@@ -20,7 +20,7 @@ export type Type =
 export interface PrimitiveType { tag: "primitive"; name: "Int" | "Float" | "Bool" | "Char" | "Str"; }
 export interface RecordTypeInfo { tag: "record"; name: string; fields: Map<string, Type>; }
 export interface SumTypeInfo { tag: "sum"; name: string; variants: Map<string, Map<string, Type>>; }
-export interface FunctionTypeInfo { tag: "function"; params: Type[]; returnType: Type; effects: Type[]; }
+export interface FunctionTypeInfo { tag: "function"; params: Type[]; returnType: Type; effects: Type[]; isAsync?: boolean; }
 export interface ListTypeInfo { tag: "list"; elementType: Type; }
 export interface MapTypeInfo { tag: "map"; keyType: Type; valueType: Type; }
 export interface OptionTypeInfo { tag: "option"; innerType: Type; }
@@ -56,6 +56,7 @@ interface TypeEnv {
   parent?: TypeEnv;
   inAsync: boolean;
   currentFnEffects: Type[];
+  currentFnName?: string;
 }
 
 export class TypeChecker {
@@ -97,10 +98,14 @@ export class TypeChecker {
       }
     }
 
-    // Second pass: register all function signatures
+    // Second pass: register all function signatures (including extern)
     for (const decl of program.declarations) {
       if (decl.kind === "FnDecl") {
         this.registerFnDecl(decl);
+      } else if (decl.kind === "ExternFnDecl") {
+        this.registerExternFnDecl(decl);
+      } else if (decl.kind === "ExternModuleDecl") {
+        this.registerExternModuleDecl(decl);
       }
     }
 
@@ -211,9 +216,46 @@ export class TypeChecker {
       params: paramTypes,
       returnType,
       effects,
+      isAsync: decl.isAsync,
     };
 
     this.globalEnv.variables.set(decl.name, fnType);
+  }
+
+  // Phase 2: Register extern fn with proper type info including effects
+  private registerExternFnDecl(decl: AST.ExternFnDecl): void {
+    const paramTypes = decl.params.map(p => this.resolveTypeExpr(p.type));
+    const returnType = decl.returnType ? this.resolveTypeExpr(decl.returnType) : VOID;
+    const effects = decl.effects.map(e => this.resolveTypeExpr(e));
+
+    const fnType: FunctionTypeInfo = {
+      tag: "function",
+      params: paramTypes,
+      returnType,
+      effects,
+      isAsync: decl.isAsync,
+    };
+
+    this.globalEnv.variables.set(decl.name, fnType);
+  }
+
+  // Phase 2: Register extern module methods with proper types
+  private registerExternModuleDecl(decl: AST.ExternModuleDecl): void {
+    const fields = new Map<string, Type>();
+    for (const method of decl.methods) {
+      const paramTypes = method.params.map(p => this.resolveTypeExpr(p.type));
+      const returnType = method.returnType ? this.resolveTypeExpr(method.returnType) : VOID;
+      const effects = method.effects.map(e => this.resolveTypeExpr(e));
+
+      fields.set(method.name, {
+        tag: "function",
+        params: paramTypes,
+        returnType,
+        effects,
+        isAsync: method.isAsync,
+      });
+    }
+    this.globalEnv.variables.set(decl.name, { tag: "record", name: decl.name, fields });
   }
 
   private checkDecl(decl: AST.TopLevelDecl, env: TypeEnv): void {
@@ -228,12 +270,10 @@ export class TypeChecker {
         this.checkTestDecl(decl, env);
         break;
       case "ExternFnDecl":
-        // Extern functions are trusted type declarations — no body to check
-        env.variables.set(decl.name, ANY);
+        // Already registered in second pass
         break;
       case "ExternModuleDecl":
-        // Register extern module name in scope
-        env.variables.set(decl.name, ANY);
+        // Already registered in second pass
         break;
       case "TypeDecl":
       case "TraitDecl":
@@ -247,6 +287,7 @@ export class TypeChecker {
     const fnEnv = this.childEnv(env);
     fnEnv.inAsync = decl.isAsync;
     fnEnv.currentFnEffects = decl.effects.map(e => this.resolveTypeExpr(e));
+    fnEnv.currentFnName = decl.name;
 
     // Add parameters to scope
     for (const param of decl.params) {
@@ -283,7 +324,10 @@ export class TypeChecker {
   }
 
   private checkTestDecl(decl: AST.TestDecl, env: TypeEnv): void {
+    // Tests are permissive — they can use any effects without declaring them
     const testEnv = this.childEnv(env);
+    testEnv.currentFnEffects = []; // Tests don't need to declare effects
+    testEnv.currentFnName = `test "${decl.name}"`;
     this.checkBlock(decl.body, testEnv);
   }
 
@@ -387,9 +431,16 @@ export class TypeChecker {
         return this.freshTypeVar(`${expr.member}_result`);
       }
 
+      // Phase 1: Effect propagation checking
       case "PropagateExpr": {
         const innerType = this.inferExpr(expr.expr, env);
-        if (innerType.tag === "result") return innerType.okType;
+        if (innerType.tag === "result") {
+          // Check that the error type is declared in the current function's effects
+          this.checkEffectDeclared(innerType.errType, env, expr.span);
+          return innerType.okType;
+        }
+        // If the inner expression is a call to an effectful function,
+        // the call effects are already checked in inferCallExpr
         return innerType;
       }
 
@@ -650,9 +701,99 @@ export class TypeChecker {
   private inferCallExpr(expr: AST.CallExpr, env: TypeEnv): Type {
     const calleeType = this.inferExpr(expr.callee, env);
     if (calleeType.tag === "function") {
+      // Phase 1: Check that callee's effects are handled by the caller
+      this.checkCalleeEffects(calleeType, expr, env);
+
+      // Phase 3: Check async effect — calling async fn from non-async context
+      if (calleeType.isAsync && !this.isInAsync(env)) {
+        const calleeName = expr.callee.kind === "Identifier" ? `'${expr.callee.name}'` : "function";
+        this.errors.push(new TypeCheckError(
+          `Cannot call async function ${calleeName} from non-async context`,
+          expr.span,
+        ));
+      }
+
       return calleeType.returnType;
     }
     return this.freshTypeVar("call_result");
+  }
+
+  // Phase 1: Check that all effects from a callee are declared by the current function
+  private checkCalleeEffects(calleeType: FunctionTypeInfo, expr: AST.CallExpr, env: TypeEnv): void {
+    if (calleeType.effects.length === 0) return;
+
+    const currentEffects = this.getCurrentFnEffects(env);
+    const currentFnName = this.getCurrentFnName(env);
+
+    // In test blocks, effects are implicitly allowed
+    if (currentFnName && currentFnName.startsWith('test "')) return;
+
+    for (const effect of calleeType.effects) {
+      if (!this.isEffectCovered(effect, currentEffects)) {
+        const calleeName = expr.callee.kind === "Identifier" ? `'${expr.callee.name}'` : "function";
+        this.errors.push(new TypeCheckError(
+          `Function ${calleeName} has effect ${this.typeToString(effect)} which is not declared by the current function` +
+          (currentFnName ? ` '${currentFnName}'` : "") +
+          `. Either handle the error or add ! ${this.typeToString(effect)} to the function signature`,
+          expr.span,
+        ));
+      }
+    }
+  }
+
+  // Phase 1: Check that a propagated error type is declared in the current function's effects
+  private checkEffectDeclared(errType: Type, env: TypeEnv, span: AST.SourceSpan): void {
+    const currentEffects = this.getCurrentFnEffects(env);
+    const currentFnName = this.getCurrentFnName(env);
+
+    // In test blocks, effects are implicitly allowed
+    if (currentFnName && currentFnName.startsWith('test "')) return;
+
+    if (!this.isEffectCovered(errType, currentEffects)) {
+      this.errors.push(new TypeCheckError(
+        `Propagated error type ${this.typeToString(errType)} is not declared in the current function's effects` +
+        (currentFnName ? ` ('${currentFnName}')` : "") +
+        `. Add ! ${this.typeToString(errType)} to the function signature`,
+        span,
+      ));
+    }
+  }
+
+  // Check if an effect type is covered by the declared effects list
+  private isEffectCovered(effect: Type, declaredEffects: Type[]): boolean {
+    // Any type acts as a wildcard — covers all effects
+    if (effect.tag === "any") return true;
+
+    for (const declared of declaredEffects) {
+      if (declared.tag === "any") return true;
+      if (this.isEffectMatch(effect, declared)) return true;
+    }
+    return false;
+  }
+
+  // Check if two effect types match
+  private isEffectMatch(effect: Type, declared: Type): boolean {
+    if (effect.tag === "any" || declared.tag === "any") return true;
+
+    // Type variables used as effect names — compare by name
+    if (effect.tag === "typevar" && declared.tag === "typevar") {
+      return effect.name === declared.name;
+    }
+
+    // For named types (most effects are named error types like IoError, ParseError)
+    if (effect.tag === declared.tag) {
+      if (effect.tag === "primitive" && declared.tag === "primitive") {
+        return effect.name === declared.name;
+      }
+      if (effect.tag === "record" && declared.tag === "record") {
+        return effect.name === declared.name;
+      }
+      if (effect.tag === "sum" && declared.tag === "sum") {
+        return effect.name === declared.name;
+      }
+      return true;
+    }
+    return false;
   }
 
   private bindPattern(pattern: AST.Pattern, env: TypeEnv): void {
@@ -717,6 +858,8 @@ export class TypeChecker {
 
     if (source.tag === "function" && target.tag === "function") {
       if (source.params.length !== target.params.length) return false;
+      // Pure functions are subtypes of effectful functions (effect subsumption)
+      // A function with fewer effects can be used where more effects are expected
       return this.isAssignable(source.returnType, target.returnType);
     }
 
@@ -730,6 +873,24 @@ export class TypeChecker {
       current = current.parent;
     }
     return false;
+  }
+
+  private getCurrentFnEffects(env: TypeEnv): Type[] {
+    let current: TypeEnv | undefined = env;
+    while (current) {
+      if (current.currentFnName !== undefined) return current.currentFnEffects;
+      current = current.parent;
+    }
+    return [];
+  }
+
+  private getCurrentFnName(env: TypeEnv): string | undefined {
+    let current: TypeEnv | undefined = env;
+    while (current) {
+      if (current.currentFnName !== undefined) return current.currentFnName;
+      current = current.parent;
+    }
+    return undefined;
   }
 
   private freshTypeVar(name: string): TypeVar {
@@ -753,7 +914,12 @@ export class TypeChecker {
       case "void": return "Void";
       case "record": return type.name;
       case "sum": return type.name;
-      case "function": return `(${type.params.map(p => this.typeToString(p)).join(", ")}) -> ${this.typeToString(type.returnType)}`;
+      case "function": {
+        const effectStr = type.effects.length > 0
+          ? ` ! ${type.effects.map(e => this.typeToString(e)).join(" | ")}`
+          : "";
+        return `(${type.params.map(p => this.typeToString(p)).join(", ")}) -> ${this.typeToString(type.returnType)}${effectStr}`;
+      }
       case "list": return `List<${this.typeToString(type.elementType)}>`;
       case "map": return `Map<${this.typeToString(type.keyType)}, ${this.typeToString(type.valueType)}>`;
       case "option": return `Option<${this.typeToString(type.innerType)}>`;

@@ -492,6 +492,7 @@ export interface ExternFnDecl extends BaseNode {
   isAsync: boolean;
   params: Param[];
   returnType?: TypeExpr;
+  effects: TypeExpr[];
   jsBinding: string;  // JavaScript expression: "console.log", "JSON.parse", etc.
 }
 
