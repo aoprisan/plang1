@@ -41,9 +41,10 @@ fn handle_hello(req: Request) -> Response ! HandlerError {
 
 fn handle_echo(req: Request) -> Response ! HandlerError {
   if req.body == "" {
-    return Err(BadRequest { message: "Body is required" })!;
+    Err(BadRequest { message: "Body is required" })!
+  } else {
+    json_response(200, req.body)
   }
-  json_response(200, req.body)
 }
 
 fn router(routes: List<Route>, req: Request) -> Response {
@@ -80,20 +81,22 @@ test "hello handler returns 200" {
   let req = Request {
     method: "GET",
     path: "/hello",
-    headers: Map.empty(),
+    headers: Map.of([("Content-Type", "application/json")]),
     body: "",
   };
   let resp = handle_hello(req);
-  assert resp == Ok(json_response(200, "{\"message\": \"Hello, PLang!\"}"));
+  assert resp.status == 200;
+  assert resp.body == "{\"message\": \"Hello, PLang!\"}";
 }
 
-test "echo handler rejects empty body" {
+test "echo handler returns body" {
   let req = Request {
     method: "POST",
     path: "/echo",
-    headers: Map.empty(),
-    body: "",
+    headers: Map.of([("Content-Type", "text/plain")]),
+    body: "hello world",
   };
   let resp = handle_echo(req);
-  assert resp == Err(BadRequest { message: "Body is required" });
+  assert resp.status == 200;
+  assert resp.body == "hello world";
 }

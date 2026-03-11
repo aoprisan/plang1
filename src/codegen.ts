@@ -100,6 +100,12 @@ export class CodeGenerator {
     this.emit("  return result;");
     this.emit("}");
     this.emit("");
+    // Wrap effectful function calls: catches __PLangError and returns Result
+    this.emit("function __tryCall(fn, ...args) {");
+    this.emit("  try { return __ok(fn(...args)); }");
+    this.emit("  catch (e) { if (e instanceof __PLangError) return __err(e.data); throw e; }");
+    this.emit("}");
+    this.emit("");
     this.emit("function __range(start, end) {");
     this.emit("  const arr = [];");
     this.emit("  for (let i = start; i < end; i++) arr.push(i);");
@@ -263,12 +269,53 @@ export class CodeGenerator {
     this.emit("    ceil: Math.ceil,");
     this.emit("    round: Math.round,");
     this.emit("  },");
+    this.emit("  net: { http: {");
+    this.emit("    serve: (addr, handler) => {");
+    this.emit("      const [host, port] = addr.includes(':') ? [addr.split(':')[0] || '0.0.0.0', parseInt(addr.split(':')[1])] : ['0.0.0.0', parseInt(addr)];");
+    this.emit("      const server = require('http').createServer((req, res) => {");
+    this.emit("        let body = '';");
+    this.emit("        req.on('data', c => body += c);");
+    this.emit("        req.on('end', () => {");
+    this.emit("          const plReq = { __type: 'Request', method: req.method, path: req.url, headers: new Map(Object.entries(req.headers)), body };");
+    this.emit("          const plRes = handler(plReq);");
+    this.emit("          if (plRes && plRes.status) {");
+    this.emit("            const hdrs = {};");
+    this.emit("            if (plRes.headers instanceof Map) plRes.headers.forEach((v, k) => hdrs[k] = v);");
+    this.emit("            res.writeHead(plRes.status, hdrs);");
+    this.emit("            res.end(plRes.body || '');");
+    this.emit("          } else { res.writeHead(500); res.end(); }");
+    this.emit("        });");
+    this.emit("      });");
+    this.emit("      server.listen(port, host);");
+    this.emit("      return __ok(undefined);");
+    this.emit("    },");
+    this.emit("  }},");
     this.emit("};");
     this.emit("");
     // Global convenience
     this.emit("const println = std.io.println;");
     this.emit("const math = std.math;");
+    this.emit("const http = std.net && std.net.http;");
     this.emit("const to_option = __wrapOption;");
+    this.emit("");
+    // Constructor aliases for Result/Option
+    this.emit("const Ok = __ok;");
+    this.emit("const Err = __err;");
+    this.emit("");
+    // Map helpers
+    this.emit("const __Map = {");
+    this.emit("  of: (entries) => new Map(entries),");
+    this.emit("  empty: () => new Map(),");
+    this.emit("};");
+    this.emit("if (typeof Map.of === 'undefined') Map.of = __Map.of;");
+    this.emit("if (typeof Map.empty === 'undefined') Map.empty = __Map.empty;");
+    this.emit("");
+    // Collection helpers (used by pipe operator)
+    this.emit("function filter(arr, fn) { return arr.filter(fn); }");
+    this.emit("function first(arr) { return arr.length > 0 ? __some(arr[0]) : __none; }");
+    this.emit("function map(arr, fn) { return arr.map(fn); }");
+    this.emit("function reduce(arr, fn, init) { return arr.reduce(fn, init); }");
+    this.emit("function find(arr, fn) { const r = arr.find(fn); return r !== undefined ? __some(r) : __none; }");
     this.emit("");
   }
 
@@ -658,8 +705,26 @@ export class CodeGenerator {
   }
 
   private matchToJs(expr: AST.MatchExpr): string {
-    const subject = this.exprToJs(expr.subject);
+    let subject = this.exprToJs(expr.subject);
     const tempVar = `__match_${Math.floor(Math.random() * 10000)}`;
+
+    // If matching on Ok/Err and subject is a function call, wrap with __tryCall
+    // to catch PLangErrors and return Result
+    const hasResultArms = expr.arms.some(arm =>
+      arm.pattern.kind === "VariantPattern" && (arm.pattern.name === "Ok" || arm.pattern.name === "Err")
+    );
+    if (hasResultArms && expr.subject.kind === "CallExpr") {
+      if (expr.subject.callee.kind === "MemberExpr") {
+        const obj = this.exprToJs(expr.subject.callee.object);
+        const member = this.mapMemberName(expr.subject.callee.member);
+        const args = expr.subject.args.map(a => this.exprToJs(a)).join(", ");
+        subject = `__tryCall(${obj}.${member}.bind(${obj})${args ? ", " + args : ""})`;
+      } else {
+        const callee = this.exprToJs(expr.subject.callee);
+        const args = expr.subject.args.map(a => this.exprToJs(a)).join(", ");
+        subject = `__tryCall(${callee}${args ? ", " + args : ""})`;
+      }
+    }
 
     const arms = expr.arms.map(arm => {
       const { condition, bindings } = this.patternToCondition(arm.pattern, tempVar);
