@@ -286,6 +286,9 @@ export class CodeGenerator {
   }
 
   private emitFnDecl(decl: AST.FnDecl): void {
+    // Trait method signatures have no body — skip code generation
+    if (!decl.body) return;
+
     const asyncPrefix = decl.isAsync ? "async " : "";
     const params = decl.params.map(p => p.name).join(", ");
     const paramNames = decl.params.map(p => p.name);
@@ -371,7 +374,7 @@ export class CodeGenerator {
         this.emit(`function ${decl.traitPath.join("_")}_${method.name}(${params}) {`);
       }
       this.indent++;
-      this.emitBlockBody(method.body);
+      if (method.body) this.emitBlockBody(method.body);
       this.indent--;
       this.emit("}");
     }
@@ -509,6 +512,9 @@ export class CodeGenerator {
       }
 
       case "ListExpr":
+        return `[${expr.elements.map(e => this.exprToJs(e)).join(", ")}]`;
+
+      case "TupleExpr":
         return `[${expr.elements.map(e => this.exprToJs(e)).join(", ")}]`;
 
       case "ObjectLiteral": {
@@ -815,6 +821,7 @@ export class CodeGenerator {
     const tailCallGraph = new Map<string, Set<string>>();
     for (const decl of fnDecls) {
       const targets = new Set<string>();
+      if (!decl.body) continue;
       if (decl.body.finalExpr) this.findTailCallTargets(decl.body.finalExpr, targets);
       for (const stmt of decl.body.statements) {
         if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" && stmt.expr.value) {

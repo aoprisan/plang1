@@ -294,6 +294,9 @@ export class TypeChecker {
       fnEnv.variables.set(param.name, this.resolveTypeExpr(param.type));
     }
 
+    // Trait method signatures have no body — skip checking
+    if (!decl.body) return;
+
     // Check body
     const bodyType = this.checkBlock(decl.body, fnEnv);
 
@@ -527,6 +530,14 @@ export class TypeChecker {
           this.inferExpr(expr.elements[i], env);
         }
         return { tag: "list", elementType: elemType };
+      }
+
+      case "TupleExpr": {
+        const fields = new Map<string, Type>();
+        expr.elements.forEach((el, i) => {
+          fields.set(`_${i}`, this.inferExpr(el, env));
+        });
+        return { tag: "record", name: "$Tuple", fields };
       }
 
       case "ObjectLiteral": {

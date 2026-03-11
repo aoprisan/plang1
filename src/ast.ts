@@ -51,7 +51,7 @@ export interface FnDecl extends BaseNode {
   params: Param[];
   returnType?: TypeExpr;
   effects: TypeExpr[];
-  body: BlockExpr;
+  body?: BlockExpr;
 }
 
 export interface Param extends BaseNode {
@@ -228,7 +228,13 @@ export type Expr =
   | SendExpr
   | RecvExpr
   | SelectExpr
-  | TimeoutExpr;
+  | TimeoutExpr
+  | TupleExpr;
+
+export interface TupleExpr extends BaseNode {
+  kind: "TupleExpr";
+  elements: Expr[];
+}
 
 export interface IntLiteral extends BaseNode {
   kind: "IntLiteral";

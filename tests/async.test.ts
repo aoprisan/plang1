@@ -60,7 +60,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const letDecl = fn.body.statements[0];
+      const letDecl = fn.body!.statements[0];
       if (letDecl.kind === "LetDecl") {
         assert.strictEqual(letDecl.value.kind, "ChannelExpr");
       }
@@ -76,7 +76,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const letDecl = fn.body.statements[0];
+      const letDecl = fn.body!.statements[0];
       if (letDecl.kind === "LetDecl" && letDecl.value.kind === "ChannelExpr") {
         assert.ok(letDecl.value.capacity);
         assert.strictEqual(letDecl.value.capacity!.kind, "IntLiteral");
@@ -93,7 +93,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const stmt = fn.body.statements[0];
+      const stmt = fn.body!.statements[0];
       if (stmt.kind === "ExprStmt") {
         assert.strictEqual(stmt.expr.kind, "SendExpr");
       }
@@ -109,7 +109,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const stmt = fn.body.statements[0];
+      const stmt = fn.body!.statements[0];
       if (stmt.kind === "LetDecl") {
         assert.strictEqual(stmt.value.kind, "RecvExpr");
       }
@@ -128,7 +128,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const stmt = fn.body.statements[0];
+      const stmt = fn.body!.statements[0];
       if (stmt.kind === "LetDecl" && stmt.value.kind === "SelectExpr") {
         assert.strictEqual(stmt.value.arms.length, 2);
         assert.strictEqual(stmt.value.arms[0].operation.kind, "RecvExpr");
@@ -150,7 +150,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const stmt = fn.body.statements[0];
+      const stmt = fn.body!.statements[0];
       if (stmt.kind === "ExprStmt" && stmt.expr.kind === "SelectExpr") {
         assert.strictEqual(stmt.expr.arms[0].operation.kind, "SendExpr");
       }
@@ -169,7 +169,7 @@ describe("Async — Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      const stmt = fn.body.statements[0];
+      const stmt = fn.body!.statements[0];
       if (stmt.kind === "ExprStmt") {
         assert.strictEqual(stmt.expr.kind, "TaskGroupExpr");
       }

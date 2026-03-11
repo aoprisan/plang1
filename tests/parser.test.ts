@@ -110,8 +110,8 @@ describe("Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      assert.strictEqual(fn.body.statements.length, 1);
-      assert.strictEqual(fn.body.statements[0].kind, "LetDecl");
+      assert.strictEqual(fn.body!.statements.length, 1);
+      assert.strictEqual(fn.body!.statements[0].kind, "LetDecl");
     }
   });
 
@@ -123,8 +123,8 @@ describe("Parser", () => {
       }
     `);
     const fn = ast.declarations[0];
-    if (fn.kind === "FnDecl" && fn.body.finalExpr) {
-      assert.strictEqual(fn.body.finalExpr.kind, "IfExpr");
+    if (fn.kind === "FnDecl" && fn.body!.finalExpr) {
+      assert.strictEqual(fn.body!.finalExpr.kind, "IfExpr");
     }
   });
 
@@ -140,10 +140,10 @@ describe("Parser", () => {
       }
     `);
     const fn = ast.declarations[0];
-    if (fn.kind === "FnDecl" && fn.body.finalExpr) {
-      assert.strictEqual(fn.body.finalExpr.kind, "MatchExpr");
-      if (fn.body.finalExpr.kind === "MatchExpr") {
-        assert.strictEqual(fn.body.finalExpr.arms.length, 3);
+    if (fn.kind === "FnDecl" && fn.body!.finalExpr) {
+      assert.strictEqual(fn.body!.finalExpr.kind, "MatchExpr");
+      if (fn.body!.finalExpr.kind === "MatchExpr") {
+        assert.strictEqual(fn.body!.finalExpr.arms.length, 3);
       }
     }
   });
@@ -167,8 +167,8 @@ describe("Parser", () => {
       }
     `);
     const fn = ast.declarations[0];
-    if (fn.kind === "FnDecl" && fn.body.finalExpr) {
-      assert.strictEqual(fn.body.finalExpr.kind, "ListExpr");
+    if (fn.kind === "FnDecl" && fn.body!.finalExpr) {
+      assert.strictEqual(fn.body!.finalExpr.kind, "ListExpr");
     }
   });
 
@@ -182,8 +182,8 @@ describe("Parser", () => {
       }
     `);
     const fn = ast.declarations[0];
-    if (fn.kind === "FnDecl" && fn.body.finalExpr) {
-      assert.strictEqual(fn.body.finalExpr.kind, "ForExpr");
+    if (fn.kind === "FnDecl" && fn.body!.finalExpr) {
+      assert.strictEqual(fn.body!.finalExpr.kind, "ForExpr");
     }
   });
 
@@ -196,8 +196,8 @@ describe("Parser", () => {
       }
     `);
     const fn = ast.declarations[1];
-    if (fn.kind === "FnDecl" && fn.body.finalExpr) {
-      assert.strictEqual(fn.body.finalExpr.kind, "RecordExpr");
+    if (fn.kind === "FnDecl" && fn.body!.finalExpr) {
+      assert.strictEqual(fn.body!.finalExpr.kind, "RecordExpr");
     }
   });
 
@@ -211,8 +211,8 @@ describe("Parser", () => {
     `);
     const fn = ast.declarations[0];
     if (fn.kind === "FnDecl") {
-      assert.strictEqual(fn.body.statements.length, 1);
-      const letDecl = fn.body.statements[0];
+      assert.strictEqual(fn.body!.statements.length, 1);
+      const letDecl = fn.body!.statements[0];
       if (letDecl.kind === "LetDecl") {
         assert.strictEqual(letDecl.value.kind, "PropagateExpr");
       }

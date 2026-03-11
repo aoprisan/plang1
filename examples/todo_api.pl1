@@ -20,6 +20,7 @@ module todo_api;
 
 extern module "express" as express_mod {
   fn create() -> Any = "default";
+  fn json() -> Any;
 }
 
 extern module "better-sqlite3" as sqlite_mod {
@@ -62,7 +63,7 @@ fn delete_todo(db: Any, id: Int) -> Void ! DbError {
 // === HTTP Routes ===
 
 fn setup_routes(app: Any, db: Any) -> Void ! DbError {
-  app.use(express_mod.create.json());
+  app.use(express_mod.json());
 
   // GET /todos — list all
   app.get("/todos", |req: Any, res: Any| {
