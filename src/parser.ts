@@ -116,6 +116,11 @@ export class Parser {
     if (this.check(TokenType.Test)) return this.parseTestDecl();
 
     const isPublic = this.match(TokenType.Pub);
+
+    if (this.check(TokenType.Extern)) {
+      return this.parseExternDecl(isPublic);
+    }
+
     const isAsync = this.check(TokenType.Async);
 
     if (this.check(TokenType.Fn) || isAsync) {
@@ -521,6 +526,99 @@ export class Parser {
     const name = this.expect(TokenType.StrLiteral).value;
     const body = this.parseBlock();
     return { kind: "TestDecl", name, body, span: this.spanFrom(start) };
+  }
+
+  // === FFI / Extern ===
+
+  private parseExternDecl(isPublic: boolean): AST.ExternFnDecl | AST.ExternModuleDecl {
+    const start = this.current();
+    this.expect(TokenType.Extern);
+
+    // extern module "name" { ... }
+    if (this.check(TokenType.Module)) {
+      return this.parseExternModuleDecl(isPublic, start);
+    }
+
+    // extern fn name(...) -> Type = "js.expression";
+    return this.parseExternFnDecl(isPublic, start);
+  }
+
+  private parseExternFnDecl(isPublic: boolean, start: Token): AST.ExternFnDecl {
+    const isAsync = this.match(TokenType.Async);
+    this.expect(TokenType.Fn);
+    const name = this.expect(TokenType.Identifier).value;
+    this.expect(TokenType.LParen);
+    const params: AST.Param[] = [];
+    if (!this.check(TokenType.RParen)) {
+      params.push(this.parseParam());
+      while (this.match(TokenType.Comma)) {
+        if (this.check(TokenType.RParen)) break;
+        params.push(this.parseParam());
+      }
+    }
+    this.expect(TokenType.RParen);
+
+    let returnType: AST.TypeExpr | undefined;
+    if (this.match(TokenType.Arrow)) {
+      returnType = this.parseTypeExpr();
+    }
+
+    this.expect(TokenType.Eq);
+    const jsBinding = this.expect(TokenType.StrLiteral).value;
+    this.expect(TokenType.Semicolon);
+
+    return {
+      kind: "ExternFnDecl", name, isPublic, isAsync, params, returnType,
+      jsBinding, span: this.spanFrom(start),
+    };
+  }
+
+  private parseExternModuleDecl(isPublic: boolean, start: Token): AST.ExternModuleDecl {
+    this.expect(TokenType.Module);
+    const jsModule = this.expect(TokenType.StrLiteral).value;
+    const name = this.match(TokenType.As) ? this.expect(TokenType.Identifier).value : jsModule.replace(/[^a-zA-Z0-9_]/g, "_");
+    this.expect(TokenType.LBrace);
+
+    const methods: AST.ExternFnDecl[] = [];
+    while (!this.check(TokenType.RBrace)) {
+      const methodStart = this.current();
+      const isAsync = this.match(TokenType.Async);
+      this.expect(TokenType.Fn);
+      const methodName = this.expect(TokenType.Identifier).value;
+      this.expect(TokenType.LParen);
+      const params: AST.Param[] = [];
+      if (!this.check(TokenType.RParen)) {
+        params.push(this.parseParam());
+        while (this.match(TokenType.Comma)) {
+          if (this.check(TokenType.RParen)) break;
+          params.push(this.parseParam());
+        }
+      }
+      this.expect(TokenType.RParen);
+
+      let returnType: AST.TypeExpr | undefined;
+      if (this.match(TokenType.Arrow)) {
+        returnType = this.parseTypeExpr();
+      }
+
+      // Optional JS binding override: = "customName"
+      let jsBinding = methodName;
+      if (this.match(TokenType.Eq)) {
+        jsBinding = this.expect(TokenType.StrLiteral).value;
+      }
+      this.expect(TokenType.Semicolon);
+
+      methods.push({
+        kind: "ExternFnDecl", name: methodName, isPublic: false, isAsync, params,
+        returnType, jsBinding, span: this.spanFrom(methodStart),
+      });
+    }
+    this.expect(TokenType.RBrace);
+
+    return {
+      kind: "ExternModuleDecl", name, isPublic, jsModule, methods,
+      span: this.spanFrom(start),
+    };
   }
 
   // === Expressions ===

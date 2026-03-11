@@ -259,6 +259,8 @@ export class CodeGenerator {
       case "ImplDecl": this.emitImplDecl(decl); break;
       case "LetDecl": this.emitLetDecl(decl); break;
       case "TestDecl": this.emitTestDecl(decl); break;
+      case "ExternFnDecl": this.emitExternFnDecl(decl); break;
+      case "ExternModuleDecl": this.emitExternModuleDecl(decl); break;
     }
   }
 
@@ -351,6 +353,39 @@ export class CodeGenerator {
     this.emitBlockBody(decl.body);
     this.indent--;
     this.emit("}");
+  }
+
+  private emitExternFnDecl(decl: AST.ExternFnDecl): void {
+    const params = decl.params.map(p => p.name).join(", ");
+    const asyncPrefix = decl.isAsync ? "async " : "";
+    this.emit(`const ${decl.name} = ${asyncPrefix}(${params}) => ${decl.jsBinding}(${params});`);
+    if (decl.isPublic) {
+      this.emit(`module.exports.${decl.name} = ${decl.name};`);
+    }
+  }
+
+  private emitExternModuleDecl(decl: AST.ExternModuleDecl): void {
+    this.emit(`const ${decl.name} = (() => {`);
+    this.indent++;
+    this.emit(`const __mod = require("${decl.jsModule}");`);
+    this.emit(`return {`);
+    this.indent++;
+    for (const method of decl.methods) {
+      const params = method.params.map(p => p.name).join(", ");
+      const asyncPrefix = method.isAsync ? "async " : "";
+      // If jsBinding differs from method name, use the binding; otherwise use module method
+      const jsFn = method.jsBinding !== method.name
+        ? `__mod.${method.jsBinding}`
+        : `__mod.${method.name}`;
+      this.emit(`${method.name}: ${asyncPrefix}(${params}) => ${jsFn}(${params}),`);
+    }
+    this.indent--;
+    this.emit(`};`);
+    this.indent--;
+    this.emit(`})();`);
+    if (decl.isPublic) {
+      this.emit(`module.exports.${decl.name} = ${decl.name};`);
+    }
   }
 
   // === Expression → JS ===

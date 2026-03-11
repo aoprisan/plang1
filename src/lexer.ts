@@ -46,6 +46,7 @@ export enum TokenType {
   Recv = "recv",
   Select = "select",
   Timeout = "timeout",
+  Extern = "extern",
 
   // Operators
   Plus = "+",
@@ -140,6 +141,7 @@ const KEYWORDS: Record<string, TokenType> = {
   recv: TokenType.Recv,
   select: TokenType.Select,
   timeout: TokenType.Timeout,
+  extern: TokenType.Extern,
 };
 
 export class LexerError extends Error {

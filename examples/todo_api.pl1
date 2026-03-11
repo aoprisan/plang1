@@ -1,0 +1,144 @@
+// Todo API — A REST web app with SQLite storage
+// Demonstrates PLang FFI with Express.js and better-sqlite3
+//
+// To run:
+//   npm install express better-sqlite3
+//   npx plang compile examples/todo_api.pl1
+//   node dist/todo_api.js
+
+module todo_api;
+
+// === FFI: External JavaScript bindings ===
+
+// Express.js web framework
+extern module "express" as express_mod {
+  fn create() -> Any = "default";
+}
+
+// SQLite database
+extern module "better-sqlite3" as sqlite_mod {
+  fn open(path: Str) -> Any = "default";
+}
+
+// JSON helpers (built-in JS)
+extern fn json_parse(s: Str) -> Any = "JSON.parse";
+extern fn json_stringify(obj: Any) -> Str = "JSON.stringify";
+
+// === Types ===
+
+type Todo = {
+  id: Int,
+  title: Str,
+  done: Bool,
+};
+
+// === Database Layer ===
+
+fn init_db(db: Any) -> Void {
+  db.exec("CREATE TABLE IF NOT EXISTS todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    done INTEGER DEFAULT 0
+  )");
+}
+
+fn get_all_todos(db: Any) -> Any {
+  let stmt = db.prepare("SELECT id, title, done FROM todos ORDER BY id");
+  stmt.all()
+}
+
+fn get_todo(db: Any, id: Int) -> Any {
+  let stmt = db.prepare("SELECT id, title, done FROM todos WHERE id = ?");
+  stmt.get(id)
+}
+
+fn create_todo(db: Any, title: Str) -> Any {
+  let stmt = db.prepare("INSERT INTO todos (title) VALUES (?)");
+  let result = stmt.run(title);
+  get_todo(db, result.lastInsertRowid)
+}
+
+fn update_todo(db: Any, id: Int, title: Str, done: Bool) -> Any {
+  let stmt = db.prepare("UPDATE todos SET title = ?, done = ? WHERE id = ?");
+  stmt.run(title, done, id);
+  get_todo(db, id)
+}
+
+fn delete_todo(db: Any, id: Int) -> Void {
+  let stmt = db.prepare("DELETE FROM todos WHERE id = ?");
+  stmt.run(id);
+}
+
+// === HTTP Routes ===
+
+fn setup_routes(app: Any, db: Any) -> Void {
+  // Middleware: parse JSON bodies
+  app.use(express_mod.create.json());
+
+  // GET /todos — list all
+  app.get("/todos", |req: Any, res: Any| {
+    let todos = get_all_todos(db);
+    res.json(todos);
+  });
+
+  // GET /todos/:id — get one
+  app.get("/todos/:id", |req: Any, res: Any| {
+    let id = req.params.id;
+    let todo = get_todo(db, id);
+    if todo == null {
+      res.status(404).json({ error: "Todo not found" });
+    } else {
+      res.json(todo);
+    };
+  });
+
+  // POST /todos — create
+  app.post("/todos", |req: Any, res: Any| {
+    let title = req.body.title;
+    if title == null {
+      res.status(400).json({ error: "Title is required" });
+    } else {
+      let todo = create_todo(db, title);
+      res.status(201).json(todo);
+    };
+  });
+
+  // PUT /todos/:id — update
+  app.put("/todos/:id", |req: Any, res: Any| {
+    let id = req.params.id;
+    let title = req.body.title;
+    let done = req.body.done;
+    let todo = update_todo(db, id, title, done);
+    res.json(todo);
+  });
+
+  // DELETE /todos/:id — delete
+  app.delete("/todos/:id", |req: Any, res: Any| {
+    let id = req.params.id;
+    delete_todo(db, id);
+    res.status(204).send();
+  });
+}
+
+// === Main ===
+
+fn main() -> Void {
+  // Initialize database
+  let db = sqlite_mod.open("todos.db");
+  init_db(db);
+
+  // Create Express app
+  let app = express_mod.create();
+  setup_routes(app, db);
+
+  // Start server
+  let port = 3000;
+  app.listen(port, || {
+    println("Todo API running on http://localhost:3000");
+    println("  GET    /todos       — list all todos");
+    println("  POST   /todos       — create a todo");
+    println("  GET    /todos/:id   — get a todo");
+    println("  PUT    /todos/:id   — update a todo");
+    println("  DELETE /todos/:id   — delete a todo");
+  });
+}

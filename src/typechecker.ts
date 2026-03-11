@@ -14,7 +14,8 @@ export type Type =
   | ResultTypeInfo
   | ChannelTypeInfo
   | TypeVar
-  | VoidType;
+  | VoidType
+  | AnyType;
 
 export interface PrimitiveType { tag: "primitive"; name: "Int" | "Float" | "Bool" | "Char" | "Str"; }
 export interface RecordTypeInfo { tag: "record"; name: string; fields: Map<string, Type>; }
@@ -27,6 +28,7 @@ export interface ResultTypeInfo { tag: "result"; okType: Type; errType: Type; }
 export interface ChannelTypeInfo { tag: "channel"; elementType: Type; }
 export interface TypeVar { tag: "typevar"; name: string; id: number; resolved?: Type; }
 export interface VoidType { tag: "void"; }
+export interface AnyType { tag: "any"; }
 
 // Built-in types
 const INT: PrimitiveType = { tag: "primitive", name: "Int" };
@@ -35,6 +37,7 @@ const BOOL: PrimitiveType = { tag: "primitive", name: "Bool" };
 const CHAR: PrimitiveType = { tag: "primitive", name: "Char" };
 const STR: PrimitiveType = { tag: "primitive", name: "Str" };
 const VOID: VoidType = { tag: "void" };
+const ANY: AnyType = { tag: "any" };
 
 export class TypeCheckError extends Error {
   constructor(
@@ -217,6 +220,14 @@ export class TypeChecker {
         break;
       case "TestDecl":
         this.checkTestDecl(decl, env);
+        break;
+      case "ExternFnDecl":
+        // Extern functions are trusted type declarations — no body to check
+        env.variables.set(decl.name, ANY);
+        break;
+      case "ExternModuleDecl":
+        // Register extern module name in scope
+        env.variables.set(decl.name, ANY);
         break;
       case "TypeDecl":
       case "TraitDecl":
@@ -734,6 +745,7 @@ export class TypeChecker {
       case "result": return `Result<${this.typeToString(type.okType)}, ${this.typeToString(type.errType)}>`;
       case "channel": return `Channel<${this.typeToString(type.elementType)}>`;
       case "typevar": return type.resolved ? this.typeToString(type.resolved) : `?${type.name}`;
+      case "any": return "Any";
     }
   }
 }

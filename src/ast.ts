@@ -38,7 +38,7 @@ export interface ImportDecl extends BaseNode {
   alias?: string;    // aliased import: use x as y
 }
 
-export type TopLevelDecl = FnDecl | TypeDecl | TraitDecl | ImplDecl | LetDecl | TestDecl;
+export type TopLevelDecl = FnDecl | TypeDecl | TraitDecl | ImplDecl | LetDecl | TestDecl | ExternFnDecl | ExternModuleDecl;
 
 // === Functions ===
 
@@ -470,6 +470,26 @@ export interface SelectArm extends BaseNode {
 export interface TimeoutExpr extends BaseNode {
   kind: "TimeoutExpr";
   duration: Expr;  // milliseconds
+}
+
+// === FFI Declarations ===
+
+export interface ExternFnDecl extends BaseNode {
+  kind: "ExternFnDecl";
+  name: string;
+  isPublic: boolean;
+  isAsync: boolean;
+  params: Param[];
+  returnType?: TypeExpr;
+  jsBinding: string;  // JavaScript expression: "console.log", "JSON.parse", etc.
+}
+
+export interface ExternModuleDecl extends BaseNode {
+  kind: "ExternModuleDecl";
+  name: string;        // PLang alias: "fs", "http", "db"
+  isPublic: boolean;
+  jsModule: string;    // npm/node module: "fs", "better-sqlite3", "express"
+  methods: ExternFnDecl[];
 }
 
 // === Test Declarations ===

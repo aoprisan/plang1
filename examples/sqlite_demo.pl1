@@ -1,0 +1,143 @@
+// SQLite Demo — Shows FFI with better-sqlite3
+// Demonstrates database CRUD operations in PLang
+//
+// To run:
+//   npm install better-sqlite3
+//   npx plang compile examples/sqlite_demo.pl1
+//   node dist/sqlite_demo.js
+
+module sqlite_demo;
+
+// === FFI: SQLite bindings ===
+
+extern module "better-sqlite3" as Database {
+  fn create(path: Str) -> Any = "default";
+}
+
+// === Types ===
+
+type User = {
+  id: Int,
+  name: Str,
+  email: Str,
+  age: Int,
+};
+
+// === Database operations ===
+
+fn create_schema(db: Any) -> Void {
+  db.exec("
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      age INTEGER NOT NULL
+    )
+  ");
+}
+
+fn insert_user(db: Any, name: Str, email: Str, age: Int) -> Any {
+  let stmt = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
+  stmt.run(name, email, age)
+}
+
+fn find_user_by_email(db: Any, email: Str) -> Any {
+  let stmt = db.prepare("SELECT * FROM users WHERE email = ?");
+  stmt.get(email)
+}
+
+fn all_users(db: Any) -> Any {
+  let stmt = db.prepare("SELECT * FROM users ORDER BY name");
+  stmt.all()
+}
+
+fn users_older_than(db: Any, min_age: Int) -> Any {
+  let stmt = db.prepare("SELECT * FROM users WHERE age > ? ORDER BY age");
+  stmt.all(min_age)
+}
+
+fn update_user_age(db: Any, email: Str, new_age: Int) -> Void {
+  let stmt = db.prepare("UPDATE users SET age = ? WHERE email = ?");
+  stmt.run(new_age, email);
+}
+
+fn delete_user(db: Any, email: Str) -> Void {
+  let stmt = db.prepare("DELETE FROM users WHERE email = ?");
+  stmt.run(email);
+}
+
+fn count_users(db: Any) -> Int {
+  let stmt = db.prepare("SELECT COUNT(*) as count FROM users");
+  let row = stmt.get();
+  row.count
+}
+
+// === Transaction example ===
+
+fn batch_insert(db: Any) -> Void {
+  // Use a transaction for bulk inserts
+  let insert = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
+
+  let tx = db.transaction(|users: Any| {
+    for user in users {
+      insert.run(user.name, user.email, user.age);
+    };
+  });
+
+  tx([
+    { name: "Alice",   email: "alice@example.com",   age: 30 },
+    { name: "Bob",     email: "bob@example.com",     age: 25 },
+    { name: "Charlie", email: "charlie@example.com", age: 35 },
+    { name: "Diana",   email: "diana@example.com",   age: 28 },
+    { name: "Eve",     email: "eve@example.com",     age: 42 },
+  ]);
+}
+
+// === Main ===
+
+fn main() -> Void {
+  // Open in-memory database (use ":memory:" for testing, file path for persistence)
+  let db = Database.create(":memory:");
+  create_schema(db);
+
+  // Bulk insert
+  println("Inserting users...");
+  batch_insert(db);
+
+  // Count
+  let total = count_users(db);
+  println("Total users: " ++ total);
+
+  // Query all
+  println("\nAll users:");
+  let users = all_users(db);
+  for user in users {
+    println("  " ++ user.name ++ " (" ++ user.email ++ ") age " ++ user.age);
+  };
+
+  // Query with filter
+  println("\nUsers older than 30:");
+  let older = users_older_than(db, 30);
+  for user in older {
+    println("  " ++ user.name ++ " — age " ++ user.age);
+  };
+
+  // Find specific user
+  println("\nLooking up bob@example.com...");
+  let bob = find_user_by_email(db, "bob@example.com");
+  println("  Found: " ++ bob.name ++ ", age " ++ bob.age);
+
+  // Update
+  println("\nUpdating Bob's age to 26...");
+  update_user_age(db, "bob@example.com", 26);
+  let updated_bob = find_user_by_email(db, "bob@example.com");
+  println("  Bob's new age: " ++ updated_bob.age);
+
+  // Delete
+  println("\nDeleting Eve...");
+  delete_user(db, "eve@example.com");
+  let remaining = count_users(db);
+  println("  Remaining users: " ++ remaining);
+
+  println("\nDone!");
+}
