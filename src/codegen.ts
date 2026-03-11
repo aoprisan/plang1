@@ -6,6 +6,8 @@ export class CodeGenerator {
   private indent: number = 0;
   private output: string[] = [];
   private testNames: string[] = [];
+  private mutualRecGroups: Set<string>[] = [];
+  private trampolinedFns: Set<string> = new Set();
 
   generate(program: AST.Program): string {
     this.output = [];
@@ -26,6 +28,9 @@ export class CodeGenerator {
     }
 
     if (program.imports.length > 0) this.emit("");
+
+    // Analyze mutual tail recursion groups
+    this.analyzeMutualRecursion(program.declarations);
 
     // Declarations
     for (const decl of program.declarations) {
@@ -227,6 +232,18 @@ export class CodeGenerator {
     this.emit("  return false;");
     this.emit("};");
     this.emit("");
+    // Trampoline for mutual tail recursion
+    this.emit("function __trampoline(fn) {");
+    this.emit("  let result = fn();");
+    this.emit("  while (result && result.__tco_continue) {");
+    this.emit("    result = result.__tco_fn(...result.__tco_args);");
+    this.emit("  }");
+    this.emit("  return result;");
+    this.emit("}");
+    this.emit("function __tco_call(fn, ...args) {");
+    this.emit("  return { __tco_continue: true, __tco_fn: fn, __tco_args: args };");
+    this.emit("}");
+    this.emit("");
     // Standard library stubs
     this.emit("const std = {");
     this.emit("  io: {");
@@ -271,21 +288,36 @@ export class CodeGenerator {
   private emitFnDecl(decl: AST.FnDecl): void {
     const asyncPrefix = decl.isAsync ? "async " : "";
     const params = decl.params.map(p => p.name).join(", ");
-    const exportPrefix = decl.isPublic ? "module.exports." : "";
+    const paramNames = decl.params.map(p => p.name);
 
-    if (decl.isPublic) {
+    if (this.isSelfTailRecursive(decl.name, decl.body)) {
+      // Self-recursive: loop transformation
       this.emit(`${asyncPrefix}function ${decl.name}(${params}) {`);
       this.indent++;
-      this.emitBlockBody(decl.body);
+      this.emit("while (true) {");
+      this.indent++;
+      this.emitTcoBlockBody(decl.name, paramNames, decl.body);
       this.indent--;
       this.emit("}");
-      this.emit(`module.exports.${decl.name} = ${decl.name};`);
+      this.indent--;
+      this.emit("}");
+    } else if (this.trampolinedFns.has(decl.name)) {
+      // Mutual recursion: trampoline transformation
+      this.emit(`${asyncPrefix}function ${decl.name}(${params}) {`);
+      this.indent++;
+      this.emitTrampolinedFnBody(decl.name, decl.body);
+      this.indent--;
+      this.emit("}");
     } else {
       this.emit(`${asyncPrefix}function ${decl.name}(${params}) {`);
       this.indent++;
       this.emitBlockBody(decl.body);
       this.indent--;
       this.emit("}");
+    }
+
+    if (decl.isPublic) {
+      this.emit(`module.exports.${decl.name} = ${decl.name};`);
     }
   }
 
@@ -431,6 +463,10 @@ export class CodeGenerator {
       case "CallExpr": {
         const callee = this.exprToJs(expr.callee);
         const args = expr.args.map(a => this.exprToJs(a)).join(", ");
+        // Wrap calls to trampolined functions from outside their group
+        if (expr.callee.kind === "Identifier" && this.trampolinedFns.has(expr.callee.name)) {
+          return `__trampoline(() => ${callee}(${args}))`;
+        }
         return `${callee}(${args})`;
       }
 
@@ -699,6 +735,353 @@ export class CodeGenerator {
       case "RequireStmt": return `__require(${this.exprToJs(stmt.condition)});`;
       case "EnsureStmt": return `/* ensure */`;
     }
+  }
+
+  // === Tail Call Optimization ===
+
+  // Check if an expression is a self-call in tail position
+  private isInTailPosition(fnName: string, expr: AST.Expr): boolean {
+    switch (expr.kind) {
+      case "CallExpr":
+        return expr.callee.kind === "Identifier" && expr.callee.name === fnName;
+      case "IfExpr": {
+        const thenTail = expr.then.finalExpr
+          ? this.isInTailPosition(fnName, expr.then.finalExpr)
+          : false;
+        const elseTail = expr.else_
+          ? (expr.else_.kind === "IfExpr"
+            ? this.isInTailPosition(fnName, expr.else_)
+            : (expr.else_.finalExpr ? this.isInTailPosition(fnName, expr.else_.finalExpr) : false))
+          : false;
+        return thenTail || elseTail;
+      }
+      case "MatchExpr":
+        return expr.arms.some(arm => this.isInTailPosition(fnName, arm.body));
+      case "BlockExpr":
+        return expr.finalExpr ? this.isInTailPosition(fnName, expr.finalExpr) : false;
+      case "ReturnExpr":
+        return expr.value ? this.isInTailPosition(fnName, expr.value) : false;
+      default:
+        return false;
+    }
+  }
+
+  // Check if body contains any self-call in tail position (also checks statements for return exprs)
+  private isSelfTailRecursive(fnName: string, body: AST.BlockExpr): boolean {
+    if (body.finalExpr && this.isInTailPosition(fnName, body.finalExpr)) return true;
+    for (const stmt of body.statements) {
+      if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" &&
+          stmt.expr.value && this.isInTailPosition(fnName, stmt.expr.value)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Find tail calls to other functions (for mutual recursion detection)
+  private findTailCallTargets(expr: AST.Expr, targets: Set<string>): void {
+    switch (expr.kind) {
+      case "CallExpr":
+        if (expr.callee.kind === "Identifier") targets.add(expr.callee.name);
+        break;
+      case "IfExpr":
+        if (expr.then.finalExpr) this.findTailCallTargets(expr.then.finalExpr, targets);
+        if (expr.else_) {
+          if (expr.else_.kind === "IfExpr") this.findTailCallTargets(expr.else_, targets);
+          else if (expr.else_.finalExpr) this.findTailCallTargets(expr.else_.finalExpr, targets);
+        }
+        break;
+      case "MatchExpr":
+        for (const arm of expr.arms) this.findTailCallTargets(arm.body, targets);
+        break;
+      case "BlockExpr":
+        if (expr.finalExpr) this.findTailCallTargets(expr.finalExpr, targets);
+        break;
+      case "ReturnExpr":
+        if (expr.value) this.findTailCallTargets(expr.value, targets);
+        break;
+    }
+  }
+
+  // Analyze declarations to find mutual recursion groups
+  private analyzeMutualRecursion(declarations: AST.TopLevelDecl[]): void {
+    this.mutualRecGroups = [];
+    this.trampolinedFns = new Set();
+
+    const fnDecls = declarations.filter(d => d.kind === "FnDecl") as AST.FnDecl[];
+    const fnNames = new Set(fnDecls.map(d => d.name));
+
+    // Build call graph: fnName -> set of functions it tail-calls (excluding self)
+    const tailCallGraph = new Map<string, Set<string>>();
+    for (const decl of fnDecls) {
+      const targets = new Set<string>();
+      if (decl.body.finalExpr) this.findTailCallTargets(decl.body.finalExpr, targets);
+      for (const stmt of decl.body.statements) {
+        if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" && stmt.expr.value) {
+          this.findTailCallTargets(stmt.expr.value, targets);
+        }
+      }
+      // Remove self (handled by loop transform) and non-declared functions
+      targets.delete(decl.name);
+      for (const t of targets) {
+        if (!fnNames.has(t)) targets.delete(t);
+      }
+      if (targets.size > 0) tailCallGraph.set(decl.name, targets);
+    }
+
+    // Find mutual recursion: if A tail-calls B and B tail-calls A, they form a group
+    const visited = new Set<string>();
+    for (const [fnName, targets] of tailCallGraph) {
+      if (visited.has(fnName)) continue;
+      const group = new Set<string>();
+      // BFS to find connected component of mutual tail calls
+      const queue = [fnName];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (group.has(current)) continue;
+        // Check if current is reachable from any group member
+        const currentTargets = tailCallGraph.get(current);
+        if (!currentTargets) continue;
+        // Only add to group if there's mutual dependency
+        let isMutual = current === fnName; // seed
+        if (!isMutual) {
+          for (const member of group) {
+            if (currentTargets.has(member)) { isMutual = true; break; }
+          }
+        }
+        if (!isMutual) continue;
+        group.add(current);
+        visited.add(current);
+        for (const target of currentTargets) {
+          if (!group.has(target)) queue.push(target);
+        }
+      }
+      if (group.size >= 2) {
+        this.mutualRecGroups.push(group);
+        for (const name of group) this.trampolinedFns.add(name);
+      }
+    }
+  }
+
+  // Check if a call target is a trampolined function (for wrapping call sites)
+  private isTrampolinedCall(expr: AST.Expr): boolean {
+    return expr.kind === "CallExpr" &&
+           expr.callee.kind === "Identifier" &&
+           this.trampolinedFns.has(expr.callee.name);
+  }
+
+  // === Self-recursion loop transform ===
+
+  private emitTcoBlockBody(fnName: string, paramNames: string[], block: AST.BlockExpr): void {
+    for (const stmt of block.statements) {
+      this.emitTcoStatement(fnName, paramNames, stmt);
+    }
+    if (block.finalExpr) {
+      this.emitTcoExpr(fnName, paramNames, block.finalExpr);
+    }
+  }
+
+  private emitTcoStatement(fnName: string, paramNames: string[], stmt: AST.Statement): void {
+    if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" &&
+        stmt.expr.value && stmt.expr.value.kind === "CallExpr" &&
+        stmt.expr.value.callee.kind === "Identifier" &&
+        stmt.expr.value.callee.name === fnName) {
+      this.emitTailCallContinue(paramNames, stmt.expr.value.args);
+      return;
+    }
+    this.emitStatement(stmt);
+  }
+
+  private emitTcoExpr(fnName: string, paramNames: string[], expr: AST.Expr): void {
+    // Self-call in tail position -> reassign params + continue
+    if (expr.kind === "CallExpr" && expr.callee.kind === "Identifier" && expr.callee.name === fnName) {
+      this.emitTailCallContinue(paramNames, expr.args);
+      return;
+    }
+
+    // Return with self-call
+    if (expr.kind === "ReturnExpr" && expr.value &&
+        expr.value.kind === "CallExpr" && expr.value.callee.kind === "Identifier" &&
+        expr.value.callee.name === fnName) {
+      this.emitTailCallContinue(paramNames, expr.value.args);
+      return;
+    }
+
+    // If expression -> statement-form with TCO in branches
+    if (expr.kind === "IfExpr") {
+      this.emitTcoIf(fnName, paramNames, expr);
+      return;
+    }
+
+    // Match expression -> statement-form with TCO in arms
+    if (expr.kind === "MatchExpr") {
+      this.emitTcoMatch(fnName, paramNames, expr);
+      return;
+    }
+
+    // Nested block
+    if (expr.kind === "BlockExpr") {
+      this.emitTcoBlockBody(fnName, paramNames, expr);
+      return;
+    }
+
+    // Not a tail call — emit as normal return
+    this.emit(`return ${this.exprToJs(expr)};`);
+  }
+
+  private emitTailCallContinue(paramNames: string[], args: AST.Expr[]): void {
+    if (args.length === 1) {
+      this.emit(`${paramNames[0]} = ${this.exprToJs(args[0])};`);
+    } else {
+      // Use temp vars to avoid order-of-evaluation issues
+      for (let i = 0; i < args.length; i++) {
+        this.emit(`let __tco_${paramNames[i]} = ${this.exprToJs(args[i])};`);
+      }
+      for (let i = 0; i < paramNames.length; i++) {
+        this.emit(`${paramNames[i]} = __tco_${paramNames[i]};`);
+      }
+    }
+    this.emit("continue;");
+  }
+
+  private emitTcoIf(fnName: string, paramNames: string[], expr: AST.IfExpr): void {
+    this.emit(`if (${this.exprToJs(expr.condition)}) {`);
+    this.indent++;
+    this.emitTcoBlockBody(fnName, paramNames, expr.then);
+    this.indent--;
+    if (expr.else_) {
+      if (expr.else_.kind === "IfExpr") {
+        this.emit("} else {");
+        this.indent++;
+        this.emitTcoIf(fnName, paramNames, expr.else_);
+        this.indent--;
+      } else {
+        this.emit("} else {");
+        this.indent++;
+        this.emitTcoBlockBody(fnName, paramNames, expr.else_);
+        this.indent--;
+      }
+    }
+    this.emit("}");
+  }
+
+  private emitTcoMatch(fnName: string, paramNames: string[], expr: AST.MatchExpr): void {
+    const subject = this.exprToJs(expr.subject);
+    const tempVar = `__match_${Math.floor(Math.random() * 10000)}`;
+    this.emit(`const ${tempVar} = ${subject};`);
+
+    for (let i = 0; i < expr.arms.length; i++) {
+      const arm = expr.arms[i];
+      const { condition, bindings } = this.patternToCondition(arm.pattern, tempVar);
+      const prefix = i === 0 ? "if" : "} else if";
+      this.emit(`${prefix} (${condition}) {`);
+      this.indent++;
+      for (const b of bindings) {
+        this.emit(`const ${b.name} = ${b.expr};`);
+      }
+      this.emitTcoExpr(fnName, paramNames, arm.body);
+      this.indent--;
+    }
+    this.emit("}");
+  }
+
+  // === Mutual recursion trampoline transform ===
+
+  private emitTrampolinedFnBody(fnName: string, body: AST.BlockExpr): void {
+    for (const stmt of body.statements) {
+      this.emitTrampolineStatement(fnName, stmt);
+    }
+    if (body.finalExpr) {
+      this.emitTrampolineExpr(fnName, body.finalExpr);
+    }
+  }
+
+  private emitTrampolineStatement(fnName: string, stmt: AST.Statement): void {
+    if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" && stmt.expr.value) {
+      if (this.isMutualTailCall(fnName, stmt.expr.value)) {
+        this.emitTrampolineReturn(stmt.expr.value as AST.CallExpr);
+        return;
+      }
+    }
+    this.emitStatement(stmt);
+  }
+
+  private emitTrampolineExpr(fnName: string, expr: AST.Expr): void {
+    if (this.isMutualTailCall(fnName, expr)) {
+      this.emitTrampolineReturn(expr as AST.CallExpr);
+      return;
+    }
+    if (expr.kind === "ReturnExpr" && expr.value && this.isMutualTailCall(fnName, expr.value)) {
+      this.emitTrampolineReturn(expr.value as AST.CallExpr);
+      return;
+    }
+    if (expr.kind === "IfExpr") {
+      this.emitTrampolineIf(fnName, expr);
+      return;
+    }
+    if (expr.kind === "MatchExpr") {
+      this.emitTrampolineMatch(fnName, expr);
+      return;
+    }
+    if (expr.kind === "BlockExpr") {
+      this.emitTrampolinedFnBody(fnName, expr);
+      return;
+    }
+    this.emit(`return ${this.exprToJs(expr)};`);
+  }
+
+  private isMutualTailCall(fnName: string, expr: AST.Expr): boolean {
+    return expr.kind === "CallExpr" &&
+           expr.callee.kind === "Identifier" &&
+           expr.callee.name !== fnName &&
+           this.trampolinedFns.has(expr.callee.name);
+  }
+
+  private emitTrampolineReturn(call: AST.CallExpr): void {
+    const callee = this.exprToJs(call.callee);
+    const args = call.args.map(a => this.exprToJs(a)).join(", ");
+    this.emit(`return __tco_call(${callee}, ${args});`);
+  }
+
+  private emitTrampolineIf(fnName: string, expr: AST.IfExpr): void {
+    this.emit(`if (${this.exprToJs(expr.condition)}) {`);
+    this.indent++;
+    this.emitTrampolinedFnBody(fnName, expr.then);
+    this.indent--;
+    if (expr.else_) {
+      if (expr.else_.kind === "IfExpr") {
+        this.emit("} else {");
+        this.indent++;
+        this.emitTrampolineIf(fnName, expr.else_);
+        this.indent--;
+      } else {
+        this.emit("} else {");
+        this.indent++;
+        this.emitTrampolinedFnBody(fnName, expr.else_);
+        this.indent--;
+      }
+    }
+    this.emit("}");
+  }
+
+  private emitTrampolineMatch(fnName: string, expr: AST.MatchExpr): void {
+    const subject = this.exprToJs(expr.subject);
+    const tempVar = `__match_${Math.floor(Math.random() * 10000)}`;
+    this.emit(`const ${tempVar} = ${subject};`);
+
+    for (let i = 0; i < expr.arms.length; i++) {
+      const arm = expr.arms[i];
+      const { condition, bindings } = this.patternToCondition(arm.pattern, tempVar);
+      const prefix = i === 0 ? "if" : "} else if";
+      this.emit(`${prefix} (${condition}) {`);
+      this.indent++;
+      for (const b of bindings) {
+        this.emit(`const ${b.name} = ${b.expr};`);
+      }
+      this.emitTrampolineExpr(fnName, arm.body);
+      this.indent--;
+    }
+    this.emit("}");
   }
 
   // === Helpers ===
