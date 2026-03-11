@@ -1,0 +1,28 @@
+{
+  "name": "plang",
+  "displayName": "PLang",
+  "description": "Syntax highlighting for the PLang programming language",
+  "version": "0.1.0",
+  "publisher": "plang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "plang",
+        "aliases": ["PLang", "plang"],
+        "extensions": [".pl1"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "plang",
+        "scopeName": "source.plang",
+        "path": "./syntaxes/plang.tmLanguage.json"
+      }
+    ]
+  }
+}
