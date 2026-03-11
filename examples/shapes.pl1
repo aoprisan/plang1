@@ -1,0 +1,61 @@
+module shapes;
+
+use std.io;
+use std.math;
+
+type Shape =
+  | Circle { radius: Float }
+  | Rect { width: Float, height: Float }
+  | Triangle { a: Float, b: Float, c: Float };
+
+trait HasArea {
+  fn area(self) -> Float;
+}
+
+impl HasArea for Shape {
+  fn area(self) -> Float {
+    match self {
+      Circle { radius } => math.pi * radius * radius,
+      Rect { width, height } => width * height,
+      Triangle { a, b, c } => {
+        let s = (a + b + c) / 2.0;
+        math.sqrt(s * (s - a) * (s - b) * (s - c))
+      },
+    }
+  }
+}
+
+fn describe(shape: Shape) -> Str {
+  match shape {
+    Circle { radius } => "Circle with radius " ++ radius.to_string(),
+    Rect { width, height } => "Rectangle " ++ width.to_string() ++ " x " ++ height.to_string(),
+    Triangle { .. } => "Triangle",
+  }
+}
+
+fn main() -> Void ! IoError {
+  let shapes = [
+    Circle { radius: 5.0 },
+    Rect { width: 4.0, height: 6.0 },
+    Triangle { a: 3.0, b: 4.0, c: 5.0 },
+  ];
+
+  for shape in shapes {
+    println(describe(shape) ++ " — area: " ++ shape.area().to_string())!;
+  }
+}
+
+test "circle area" {
+  let c = Circle { radius: 1.0 };
+  assert c.area() ~= math.pi;
+}
+
+test "rectangle area" {
+  let r = Rect { width: 3.0, height: 4.0 };
+  assert r.area() == 12.0;
+}
+
+test "right triangle area" {
+  let t = Triangle { a: 3.0, b: 4.0, c: 5.0 };
+  assert t.area() ~= 6.0;
+}

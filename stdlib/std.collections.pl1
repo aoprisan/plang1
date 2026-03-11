@@ -1,0 +1,80 @@
+module std.collections;
+
+// Standard collections module
+// List, Map, and Set operations.
+// These map to JavaScript arrays, Map, and Set with immutable wrappers.
+
+// === List operations ===
+
+pub fn map<A, B>(list: List<A>, f: (A) -> B) -> List<B> {
+  for item in list { f(item) }
+}
+
+pub fn filter<T>(list: List<T>, pred: (T) -> Bool) -> List<T> {
+  // Built-in: maps to Array.filter
+}
+
+pub fn reduce<T, A>(list: List<T>, init: A, f: (A, T) -> A) -> A {
+  // Built-in: maps to Array.reduce
+}
+
+pub fn first<T>(list: List<T>) -> Option<T> {
+  match list {
+    [] => None,
+    [head, ..] => Some { value: head },
+  }
+}
+
+pub fn last<T>(list: List<T>) -> Option<T> {
+  // Built-in
+}
+
+pub fn length<T>(list: List<T>) -> Int {
+  // Built-in: maps to Array.length
+}
+
+pub fn contains<T: Eq>(list: List<T>, item: T) -> Bool {
+  // Built-in: maps to Array.includes
+}
+
+pub fn sort<T: Ord>(list: List<T>) -> List<T> {
+  // Built-in: maps to Array.toSorted
+}
+
+pub fn reverse<T>(list: List<T>) -> List<T> {
+  // Built-in: maps to Array.toReversed
+}
+
+pub fn sum(list: List<Int>) -> Int {
+  reduce(list, 0, |acc: Int, x: Int| { acc + x })
+}
+
+pub fn zip<A, B>(a: List<A>, b: List<B>) -> List<(A, B)> {
+  // Built-in
+}
+
+pub fn flat_map<A, B>(list: List<A>, f: (A) -> List<B>) -> List<B> {
+  // Built-in: maps to Array.flatMap
+}
+
+// === Map operations ===
+
+pub fn map_of<K, V>(entries: List<(K, V)>) -> Map<K, V> {
+  // Built-in: maps to new Map(entries)
+}
+
+pub fn map_get<K, V>(m: Map<K, V>, key: K) -> Option<V> {
+  // Built-in
+}
+
+pub fn map_set<K, V>(m: Map<K, V>, key: K, value: V) -> Map<K, V> {
+  // Built-in: returns new Map with entry added
+}
+
+pub fn map_keys<K, V>(m: Map<K, V>) -> List<K> {
+  // Built-in
+}
+
+pub fn map_values<K, V>(m: Map<K, V>) -> List<V> {
+  // Built-in
+}

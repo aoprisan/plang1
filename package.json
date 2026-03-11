@@ -1,0 +1,20 @@
+{
+  "name": "plang",
+  "version": "0.1.0",
+  "description": "PLang — an AI-optimized general-purpose programming language",
+  "main": "dist/index.js",
+  "bin": {
+    "plang": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/tests/*.test.js",
+    "start": "node dist/cli.js"
+  },
+  "keywords": ["programming-language", "transpiler", "ai-optimized"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
+  }
+}

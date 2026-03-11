@@ -1,0 +1,51 @@
+module std.math;
+
+// Standard math module
+// Constants and functions map to JavaScript's Math object.
+
+pub let pi: Float = 3.141592653589793;
+pub let e: Float = 2.718281828459045;
+
+pub fn sqrt(x: Float) -> Float {
+  // Built-in: maps to Math.sqrt
+}
+
+pub fn abs(x: Float) -> Float {
+  // Built-in: maps to Math.abs
+}
+
+pub fn floor(x: Float) -> Int {
+  // Built-in: maps to Math.floor
+}
+
+pub fn ceil(x: Float) -> Int {
+  // Built-in: maps to Math.ceil
+}
+
+pub fn round(x: Float) -> Int {
+  // Built-in: maps to Math.round
+}
+
+pub fn pow(base: Float, exp: Float) -> Float {
+  // Built-in: maps to Math.pow
+}
+
+pub fn log(x: Float) -> Float {
+  // Built-in: maps to Math.log
+}
+
+pub fn sin(x: Float) -> Float {
+  // Built-in: maps to Math.sin
+}
+
+pub fn cos(x: Float) -> Float {
+  // Built-in: maps to Math.cos
+}
+
+pub fn min(a: Float, b: Float) -> Float {
+  if a < b { a } else { b }
+}
+
+pub fn max(a: Float, b: Float) -> Float {
+  if a > b { a } else { b }
+}

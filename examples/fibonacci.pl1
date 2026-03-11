@@ -1,0 +1,42 @@
+module fibonacci;
+
+use std.io;
+
+fn fib(n: Int) -> Int {
+  if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn fib_tail(n: Int, a: Int, b: Int) -> Int {
+  if n == 0 { a } else { fib_tail(n - 1, b, a + b) }
+}
+
+fn fib_iter(n: Int) -> Int {
+  var a = 0;
+  var b = 1;
+  for _ in 0..n {
+    let next = a + b;
+    a = b;
+    b = next;
+  }
+  a
+}
+
+fn main() -> Void ! IoError {
+  println("Recursive:")!;
+  for i in 0..10 {
+    println(fib(i).to_string())!;
+  }
+
+  println("Tail-recursive:")!;
+  for i in 0..10 {
+    println(fib_tail(i, 0, 1).to_string())!;
+  }
+}
+
+test "fibonacci correctness" {
+  assert fib(0) == 0;
+  assert fib(1) == 1;
+  assert fib(10) == 55;
+  assert fib_tail(10, 0, 1) == 55;
+  assert fib_iter(10) == 55;
+}

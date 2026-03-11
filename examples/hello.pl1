@@ -1,0 +1,16 @@
+module hello;
+
+use std.io;
+
+fn greet(name: Str) -> Str {
+  "Hello, " ++ name ++ "!"
+}
+
+fn main() -> Void ! IoError {
+  println(greet("world"))!;
+}
+
+test "greet produces correct output" {
+  assert greet("PLang") == "Hello, PLang!";
+  assert greet("") == "Hello, !";
+}

@@ -1,0 +1,29 @@
+module std.io;
+
+// Standard I/O module
+// These are implemented as built-in functions in the runtime.
+
+type IoError =
+  | FileNotFound { path: Str }
+  | PermissionDenied { path: Str }
+  | IoGeneric { message: Str };
+
+pub fn println(message: Str) -> Void ! IoError {
+  // Built-in: maps to console.log
+}
+
+pub fn print(message: Str) -> Void ! IoError {
+  // Built-in: maps to process.stdout.write
+}
+
+pub fn readln() -> Str ! IoError {
+  // Built-in: reads a line from stdin
+}
+
+pub fn read_file(path: Str) -> Str ! IoError {
+  // Built-in: maps to fs.readFileSync
+}
+
+pub fn write_file(path: Str, content: Str) -> Void ! IoError {
+  // Built-in: maps to fs.writeFileSync
+}

@@ -1,0 +1,99 @@
+module webserver;
+
+use std.io;
+use std.net.http;
+
+type Route = {
+  method: Str,
+  path: Str,
+  handler: (Request) -> Response ! HandlerError,
+};
+
+type Request = {
+  method: Str,
+  path: Str,
+  headers: Map<Str, Str>,
+  body: Str,
+};
+
+type Response = {
+  status: Int,
+  headers: Map<Str, Str>,
+  body: Str,
+};
+
+type HandlerError =
+  | NotFound { path: Str }
+  | BadRequest { message: Str }
+  | InternalError { message: Str };
+
+fn json_response(status: Int, data: Str) -> Response {
+  Response {
+    status: status,
+    headers: Map.of([("Content-Type", "application/json")]),
+    body: data,
+  }
+}
+
+fn handle_hello(req: Request) -> Response ! HandlerError {
+  json_response(200, "{\"message\": \"Hello, PLang!\"}")
+}
+
+fn handle_echo(req: Request) -> Response ! HandlerError {
+  if req.body == "" {
+    return Err(BadRequest { message: "Body is required" })!;
+  }
+  json_response(200, req.body)
+}
+
+fn router(routes: List<Route>, req: Request) -> Response {
+  let matched = routes
+    |> filter(|r| r.method == req.method && r.path == req.path)
+    |> first();
+
+  match matched {
+    Some { value } => {
+      match value.handler(req) {
+        Ok { value } => value,
+        Err { error } => match error {
+          NotFound { path } => json_response(404, "{\"error\": \"not found\"}"),
+          BadRequest { message } => json_response(400, "{\"error\": \"" ++ message ++ "\"}"),
+          InternalError { message } => json_response(500, "{\"error\": \"" ++ message ++ "\"}"),
+        },
+      }
+    },
+    None => json_response(404, "{\"error\": \"no matching route\"}"),
+  }
+}
+
+fn main() -> Void ! IoError {
+  let routes = [
+    Route { method: "GET", path: "/hello", handler: handle_hello },
+    Route { method: "POST", path: "/echo", handler: handle_echo },
+  ];
+
+  println("Starting server on :8080")!;
+  http.serve(":8080", |req| router(routes, req))!;
+}
+
+test "hello handler returns 200" {
+  let req = Request {
+    method: "GET",
+    path: "/hello",
+    headers: Map.empty(),
+    body: "",
+  };
+  let resp = handle_hello(req);
+  assert resp == Ok(json_response(200, "{\"message\": \"Hello, PLang!\"}"));
+}
+
+test "echo handler rejects empty body" {
+  let req = Request {
+    method: "POST",
+    path: "/echo",
+    headers: Map.empty(),
+    body: "",
+  };
+  let resp = handle_echo(req);
+  assert resp == Err(BadRequest { message: "Body is required" });
+}

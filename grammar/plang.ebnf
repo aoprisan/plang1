@@ -1,0 +1,133 @@
+(* PLang Formal Grammar — EBNF *)
+
+(* === Top-Level === *)
+program        = module_decl , { import_decl } , { top_level_decl } ;
+module_decl    = "module" , module_path , ";" ;
+module_path    = IDENT , { "." , IDENT } ;
+
+import_decl    = "use" , module_path , [ import_spec ] , ";" ;
+import_spec    = "." , "{" , IDENT , { "," , IDENT } , "}"
+               | "as" , IDENT ;
+
+top_level_decl = fn_decl
+               | type_decl
+               | trait_decl
+               | impl_decl
+               | let_decl
+               | test_decl ;
+
+(* === Functions === *)
+fn_decl        = [ "pub" ] , [ "async" ] , "fn" , IDENT , [ type_params ] ,
+                 "(" , [ param_list ] , ")" , [ "->" , type_expr , [ effect_type ] ] ,
+                 block ;
+param_list     = param , { "," , param } ;
+param          = IDENT , ":" , type_expr ;
+type_params    = "<" , type_param , { "," , type_param } , ">" ;
+type_param     = IDENT , [ ":" , trait_bound , { "+" , trait_bound } ] ;
+trait_bound    = module_path ;
+
+effect_type    = "!" , type_expr , { "|" , type_expr } ;
+
+(* === Types === *)
+type_decl      = [ "pub" ] , "type" , IDENT , [ type_params ] , "=" , type_body , ";" ;
+type_body      = record_type
+               | sum_type
+               | type_expr ;
+
+record_type    = "{" , field_decl , { "," , field_decl } , "}" ;
+field_decl     = IDENT , ":" , type_expr ;
+
+sum_type       = [ "|" ] , variant , { "|" , variant } ;
+variant        = IDENT , [ record_type ] ;
+
+type_expr      = IDENT , [ "<" , type_expr , { "," , type_expr } , ">" ]
+               | "(" , [ type_expr , { "," , type_expr } ] , ")" , "->" , type_expr , [ effect_type ]
+               | "(" , type_expr , { "," , type_expr } , ")"
+               | record_type ;
+
+(* === Traits & Impls === *)
+trait_decl     = [ "pub" ] , "trait" , IDENT , [ type_params ] , "{" , { trait_item } , "}" ;
+trait_item     = fn_decl ;
+
+impl_decl      = "impl" , module_path , [ type_params ] , "for" , type_expr ,
+                 "{" , { fn_decl } , "}" ;
+
+(* === Statements & Expressions === *)
+let_decl       = "let" , IDENT , [ ":" , type_expr ] , "=" , expr , ";" ;
+var_decl       = "var" , IDENT , [ ":" , type_expr ] , "=" , expr , ";" ;
+
+statement      = let_decl
+               | var_decl
+               | assign_stmt
+               | expr , ";" ;
+
+assign_stmt    = IDENT , assign_op , expr , ";" ;
+assign_op      = "=" | "+=" | "-=" | "*=" | "/=" ;
+
+block          = "{" , { statement } , [ expr ] , "}" ;
+
+expr           = if_expr
+               | match_expr
+               | for_expr
+               | while_expr
+               | lambda_expr
+               | pipe_expr ;
+
+pipe_expr      = or_expr , { "|>" , call_expr } ;
+or_expr        = and_expr , { "||" , and_expr } ;
+and_expr       = eq_expr , { "&&" , eq_expr } ;
+eq_expr        = cmp_expr , { ( "==" | "!=" | "~=" ) , cmp_expr } ;
+cmp_expr       = add_expr , { ( "<" | ">" | "<=" | ">=" ) , add_expr } ;
+add_expr       = mul_expr , { ( "+" | "-" | "++" ) , mul_expr } ;
+mul_expr       = unary_expr , { ( "*" | "/" | "%" ) , unary_expr } ;
+unary_expr     = [ "!" | "-" ] , postfix_expr ;
+postfix_expr   = primary , { "." , IDENT | "(" , [ arg_list ] , ")" | "!" } ;
+primary        = INT_LIT | FLOAT_LIT | STR_LIT | CHAR_LIT | BOOL_LIT
+               | IDENT
+               | "(" , expr , ")"
+               | "[" , [ expr , { "," , expr } ] , "]"
+               | record_lit
+               | block ;
+
+record_lit     = IDENT , "{" , field_init , { "," , field_init } , "}" ;
+field_init     = IDENT , ":" , expr
+               | IDENT ;  (* shorthand: name: name *)
+
+arg_list       = expr , { "," , expr } ;
+
+if_expr        = "if" , expr , block , [ "else" , ( block | if_expr ) ] ;
+
+match_expr     = "match" , expr , "{" , match_arm , { "," , match_arm } , [ "," ] , "}" ;
+match_arm      = pattern , "=>" , expr ;
+pattern        = IDENT , [ "{" , field_pattern , { "," , field_pattern } , "}" ]
+               | literal_pattern
+               | "[" , [ pattern , { "," , pattern } , [ "," , ".." ] ] , "]"
+               | "_" ;
+field_pattern  = IDENT , [ ":" , pattern ]
+               | ".." ;
+literal_pattern = INT_LIT | STR_LIT | CHAR_LIT | BOOL_LIT ;
+
+for_expr       = "for" , IDENT , "in" , expr , block ;
+while_expr     = "while" , expr , block ;
+
+lambda_expr    = "|" , [ param_list ] , "|" , [ "->" , type_expr ] , block ;
+
+(* === Testing & Contracts === *)
+test_decl      = "test" , STR_LIT , block ;
+require_stmt   = "require" , expr , ";" ;
+ensure_stmt    = "ensure" , "|" , IDENT , "|" , expr , ";" ;
+assert_stmt    = "assert" , expr , ";" ;
+
+(* === Async === *)
+await_expr     = "await" , expr ;
+spawn_expr     = "task_group" , "|" , IDENT , "|" , block ;
+
+(* === Lexical === *)
+IDENT          = LETTER , { LETTER | DIGIT | "_" } ;
+INT_LIT        = DIGIT , { DIGIT } ;
+FLOAT_LIT      = DIGIT , { DIGIT } , "." , DIGIT , { DIGIT } ;
+STR_LIT        = '"' , { CHAR } , '"' ;
+CHAR_LIT       = "'" , CHAR , "'" ;
+BOOL_LIT       = "true" | "false" ;
+LETTER         = "a" | ... | "z" | "A" | ... | "Z" | "_" ;
+DIGIT          = "0" | ... | "9" ;
