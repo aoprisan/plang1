@@ -106,6 +106,124 @@ export class CodeGenerator {
     // String concat
     this.emit("function __concat(a, b) { return String(a) + String(b); }");
     this.emit("");
+    // Structured concurrency with cancellation
+    this.emit("class __TaskGroup {");
+    this.emit("  constructor() { this._tasks = []; this._controller = new AbortController(); }");
+    this.emit("  spawn(fn) {");
+    this.emit("    const signal = this._controller.signal;");
+    this.emit("    this._tasks.push(fn(signal));");
+    this.emit("  }");
+    this.emit("  async run() {");
+    this.emit("    try {");
+    this.emit("      return await Promise.all(this._tasks);");
+    this.emit("    } catch (e) {");
+    this.emit("      this._controller.abort(e);");
+    this.emit("      await Promise.allSettled(this._tasks);");
+    this.emit("      throw e;");
+    this.emit("    }");
+    this.emit("  }");
+    this.emit("}");
+    this.emit("");
+    // Channel implementation
+    this.emit("class __Channel {");
+    this.emit("  constructor(capacity = 0) {");
+    this.emit("    this._capacity = capacity;");
+    this.emit("    this._buffer = [];");
+    this.emit("    this._waitingSenders = [];");
+    this.emit("    this._waitingReceivers = [];");
+    this.emit("    this._closed = false;");
+    this.emit("  }");
+    this.emit("  async send(value) {");
+    this.emit("    if (this._closed) throw new Error('send on closed channel');");
+    this.emit("    if (this._waitingReceivers.length > 0) {");
+    this.emit("      const resolve = this._waitingReceivers.shift();");
+    this.emit("      resolve(__some(value));");
+    this.emit("      return;");
+    this.emit("    }");
+    this.emit("    if (this._buffer.length < this._capacity) {");
+    this.emit("      this._buffer.push(value);");
+    this.emit("      return;");
+    this.emit("    }");
+    this.emit("    return new Promise(resolve => {");
+    this.emit("      this._waitingSenders.push({ value, resolve });");
+    this.emit("    });");
+    this.emit("  }");
+    this.emit("  async recv() {");
+    this.emit("    if (this._buffer.length > 0) {");
+    this.emit("      const value = this._buffer.shift();");
+    this.emit("      if (this._waitingSenders.length > 0) {");
+    this.emit("        const sender = this._waitingSenders.shift();");
+    this.emit("        this._buffer.push(sender.value);");
+    this.emit("        sender.resolve();");
+    this.emit("      }");
+    this.emit("      return __some(value);");
+    this.emit("    }");
+    this.emit("    if (this._waitingSenders.length > 0) {");
+    this.emit("      const sender = this._waitingSenders.shift();");
+    this.emit("      sender.resolve();");
+    this.emit("      return __some(sender.value);");
+    this.emit("    }");
+    this.emit("    if (this._closed) return __none;");
+    this.emit("    return new Promise(resolve => {");
+    this.emit("      this._waitingReceivers.push(resolve);");
+    this.emit("    });");
+    this.emit("  }");
+    this.emit("  close() {");
+    this.emit("    this._closed = true;");
+    this.emit("    for (const resolve of this._waitingReceivers) resolve(__none);");
+    this.emit("    this._waitingReceivers = [];");
+    this.emit("  }");
+    this.emit("}");
+    this.emit("");
+    // Select implementation
+    this.emit("async function __select(arms) {");
+    this.emit("  return new Promise((resolve, reject) => {");
+    this.emit("    let settled = false;");
+    this.emit("    const cleanups = [];");
+    this.emit("    for (const arm of arms) {");
+    this.emit("      if (settled) break;");
+    this.emit("      if (arm.type === 'recv') {");
+    this.emit("        const r = arm.channel.tryRecv();");
+    this.emit("        if (r && r.__tag === 'Some') {");
+    this.emit("          settled = true; resolve(arm.handler(r.value)); return;");
+    this.emit("        }");
+    this.emit("        arm.channel._waitingReceivers.push((val) => {");
+    this.emit("          if (!settled) {");
+    this.emit("            settled = true;");
+    this.emit("            for (const c of cleanups) c();");
+    this.emit("            resolve(arm.handler(val && val.__tag === 'Some' ? val.value : undefined));");
+    this.emit("          }");
+    this.emit("        });");
+    this.emit("      } else if (arm.type === 'timeout') {");
+    this.emit("        const t = setTimeout(() => {");
+    this.emit("          if (!settled) { settled = true; for (const c of cleanups) c(); resolve(arm.handler()); }");
+    this.emit("        }, arm.duration);");
+    this.emit("        cleanups.push(() => clearTimeout(t));");
+    this.emit("      } else if (arm.type === 'send') {");
+    this.emit("        const ok = arm.channel.trySend(arm.value);");
+    this.emit("        if (ok) { settled = true; resolve(arm.handler()); return; }");
+    this.emit("      }");
+    this.emit("    }");
+    this.emit("  });");
+    this.emit("}");
+    this.emit("");
+    // tryRecv/trySend helpers on Channel
+    this.emit("__Channel.prototype.tryRecv = function() {");
+    this.emit("  if (this._buffer.length > 0) return __some(this._buffer.shift());");
+    this.emit("  if (this._waitingSenders.length > 0) {");
+    this.emit("    const s = this._waitingSenders.shift(); s.resolve(); return __some(s.value);");
+    this.emit("  }");
+    this.emit("  return __none;");
+    this.emit("};");
+    this.emit("__Channel.prototype.trySend = function(value) {");
+    this.emit("  if (this._closed) return false;");
+    this.emit("  if (this._waitingReceivers.length > 0) {");
+    this.emit("    this._waitingReceivers.shift()(__some(value)); return true;");
+    this.emit("  }");
+    this.emit("  if (this._buffer.length < this._capacity) { this._buffer.push(value); return true; }");
+    this.emit("  return false;");
+    this.emit("};");
+    this.emit("");
     // Standard library stubs
     this.emit("const std = {");
     this.emit("  io: {");
@@ -336,7 +454,24 @@ export class CodeGenerator {
         return `await ${this.exprToJs(expr.expr)}`;
 
       case "TaskGroupExpr":
-        return `await Promise.all((() => { const __tasks = []; const ${expr.paramName} = { spawn: (fn) => __tasks.push(fn()) }; ${this.blockToJsInline(expr.body)}; return __tasks; })())`;
+        return `await (async () => { const ${expr.paramName} = new __TaskGroup(); ${this.blockToJsInline(expr.body)}; return ${expr.paramName}.run(); })()`;
+
+      case "ChannelExpr":
+        return expr.capacity
+          ? `new __Channel(${this.exprToJs(expr.capacity)})`
+          : `new __Channel()`;
+
+      case "SendExpr":
+        return `await ${this.exprToJs(expr.channel)}.send(${this.exprToJs(expr.value)})`;
+
+      case "RecvExpr":
+        return `await ${this.exprToJs(expr.channel)}.recv()`;
+
+      case "SelectExpr":
+        return this.selectToJs(expr);
+
+      case "TimeoutExpr":
+        return `new Promise(r => setTimeout(r, ${this.exprToJs(expr.duration)}))`;
 
       case "AssertExpr":
         return `__assert(${this.exprToJs(expr.condition)}, ${JSON.stringify(this.exprToSourceString(expr.condition))})`;
@@ -347,6 +482,29 @@ export class CodeGenerator {
       default:
         return `/* unsupported: ${(expr as any).kind} */`;
     }
+  }
+
+  private selectToJs(expr: AST.SelectExpr): string {
+    const arms = expr.arms.map(arm => {
+      const body = this.exprToJs(arm.body);
+      switch (arm.operation.kind) {
+        case "RecvExpr": {
+          const ch = this.exprToJs(arm.operation.channel);
+          const paramName = arm.bindName || "__val";
+          return `{ type: 'recv', channel: ${ch}, handler: (${paramName}) => ${body} }`;
+        }
+        case "SendExpr": {
+          const ch = this.exprToJs(arm.operation.channel);
+          const val = this.exprToJs(arm.operation.value);
+          return `{ type: 'send', channel: ${ch}, value: ${val}, handler: () => ${body} }`;
+        }
+        case "TimeoutExpr": {
+          const dur = this.exprToJs(arm.operation.duration);
+          return `{ type: 'timeout', duration: ${dur}, handler: () => ${body} }`;
+        }
+      }
+    });
+    return `await __select([${arms.join(", ")}])`;
   }
 
   private matchToJs(expr: AST.MatchExpr): string {

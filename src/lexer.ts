@@ -41,6 +41,11 @@ export enum TokenType {
   Catch = "catch",
   Self = "self",
   Spawn = "spawn",
+  Channel = "channel",
+  Send = "send",
+  Recv = "recv",
+  Select = "select",
+  Timeout = "timeout",
 
   // Operators
   Plus = "+",
@@ -130,6 +135,11 @@ const KEYWORDS: Record<string, TokenType> = {
   catch: TokenType.Catch,
   self: TokenType.Self,
   spawn: TokenType.Spawn,
+  channel: TokenType.Channel,
+  send: TokenType.Send,
+  recv: TokenType.Recv,
+  select: TokenType.Select,
+  timeout: TokenType.Timeout,
 };
 
 export class LexerError extends Error {

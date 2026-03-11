@@ -221,7 +221,12 @@ export type Expr =
   | AwaitExpr
   | TaskGroupExpr
   | AssertExpr
-  | RangeExpr;
+  | RangeExpr
+  | ChannelExpr
+  | SendExpr
+  | RecvExpr
+  | SelectExpr
+  | TimeoutExpr;
 
 export interface IntLiteral extends BaseNode {
   kind: "IntLiteral";
@@ -430,6 +435,41 @@ export interface RangeExpr extends BaseNode {
   kind: "RangeExpr";
   start: Expr;
   end: Expr;
+}
+
+// === Channel & Concurrency ===
+
+export interface ChannelExpr extends BaseNode {
+  kind: "ChannelExpr";
+  capacity?: Expr;  // None = unbuffered, Some = buffered
+}
+
+export interface SendExpr extends BaseNode {
+  kind: "SendExpr";
+  channel: Expr;
+  value: Expr;
+}
+
+export interface RecvExpr extends BaseNode {
+  kind: "RecvExpr";
+  channel: Expr;
+}
+
+export interface SelectExpr extends BaseNode {
+  kind: "SelectExpr";
+  arms: SelectArm[];
+}
+
+export interface SelectArm extends BaseNode {
+  kind: "SelectArm";
+  operation: SendExpr | RecvExpr | TimeoutExpr;
+  bindName?: string;  // for recv: select { msg <- ch => ... }
+  body: Expr;
+}
+
+export interface TimeoutExpr extends BaseNode {
+  kind: "TimeoutExpr";
+  duration: Expr;  // milliseconds
 }
 
 // === Test Declarations ===

@@ -12,6 +12,7 @@ export type Type =
   | MapTypeInfo
   | OptionTypeInfo
   | ResultTypeInfo
+  | ChannelTypeInfo
   | TypeVar
   | VoidType;
 
@@ -23,6 +24,7 @@ export interface ListTypeInfo { tag: "list"; elementType: Type; }
 export interface MapTypeInfo { tag: "map"; keyType: Type; valueType: Type; }
 export interface OptionTypeInfo { tag: "option"; innerType: Type; }
 export interface ResultTypeInfo { tag: "result"; okType: Type; errType: Type; }
+export interface ChannelTypeInfo { tag: "channel"; elementType: Type; }
 export interface TypeVar { tag: "typevar"; name: string; id: number; resolved?: Type; }
 export interface VoidType { tag: "void"; }
 
@@ -49,6 +51,8 @@ interface TypeEnv {
   types: Map<string, Type>;
   traits: Map<string, AST.TraitDecl>;
   parent?: TypeEnv;
+  inAsync: boolean;
+  currentFnEffects: Type[];
 }
 
 export class TypeChecker {
@@ -69,6 +73,8 @@ export class TypeChecker {
       variables: new Map(),
       types,
       traits: new Map(),
+      inAsync: false,
+      currentFnEffects: [],
     };
   }
 
@@ -142,6 +148,9 @@ export class TypeChecker {
               keyType: this.resolveTypeExpr(typeExpr.typeArgs[0]),
               valueType: this.resolveTypeExpr(typeExpr.typeArgs[1]),
             };
+          }
+          if (typeExpr.name === "Channel" && typeExpr.typeArgs.length === 1) {
+            return { tag: "channel", elementType: this.resolveTypeExpr(typeExpr.typeArgs[0]) };
           }
           if (typeExpr.name === "Option" && typeExpr.typeArgs.length === 1) {
             return { tag: "option", innerType: this.resolveTypeExpr(typeExpr.typeArgs[0]) };
@@ -219,6 +228,8 @@ export class TypeChecker {
 
   private checkFnDecl(decl: AST.FnDecl, env: TypeEnv): void {
     const fnEnv = this.childEnv(env);
+    fnEnv.inAsync = decl.isAsync;
+    fnEnv.currentFnEffects = decl.effects.map(e => this.resolveTypeExpr(e));
 
     // Add parameters to scope
     for (const param of decl.params) {
@@ -474,11 +485,101 @@ export class TypeChecker {
       case "ContinueExpr":
         return VOID;
 
-      case "AwaitExpr":
+      case "AwaitExpr": {
+        if (!this.isInAsync(env)) {
+          this.errors.push(new TypeCheckError(
+            "'await' can only be used inside an async function",
+            expr.span,
+          ));
+        }
         return this.inferExpr(expr.expr, env);
+      }
 
-      case "TaskGroupExpr":
-        return this.checkBlock(expr.body, env);
+      case "TaskGroupExpr": {
+        if (!this.isInAsync(env)) {
+          this.errors.push(new TypeCheckError(
+            "'task_group' can only be used inside an async function",
+            expr.span,
+          ));
+        }
+        const tgEnv = this.childEnv(env);
+        tgEnv.inAsync = true;
+        return this.checkBlock(expr.body, tgEnv);
+      }
+
+      case "ChannelExpr": {
+        if (expr.capacity) {
+          const capType = this.inferExpr(expr.capacity, env);
+          if (capType.tag !== "primitive" || capType.name !== "Int") {
+            this.errors.push(new TypeCheckError(
+              `Channel capacity must be Int, got ${this.typeToString(capType)}`,
+              expr.span,
+            ));
+          }
+        }
+        return { tag: "channel", elementType: this.freshTypeVar("T") } as ChannelTypeInfo;
+      }
+
+      case "SendExpr": {
+        if (!this.isInAsync(env)) {
+          this.errors.push(new TypeCheckError(
+            "'send' can only be used inside an async function",
+            expr.span,
+          ));
+        }
+        const chType = this.inferExpr(expr.channel, env);
+        this.inferExpr(expr.value, env);
+        if (chType.tag !== "channel" && chType.tag !== "typevar") {
+          this.errors.push(new TypeCheckError(
+            `send expects a Channel, got ${this.typeToString(chType)}`,
+            expr.span,
+          ));
+        }
+        return VOID;
+      }
+
+      case "RecvExpr": {
+        if (!this.isInAsync(env)) {
+          this.errors.push(new TypeCheckError(
+            "'recv' can only be used inside an async function",
+            expr.span,
+          ));
+        }
+        const chType = this.inferExpr(expr.channel, env);
+        if (chType.tag === "channel") return chType.elementType;
+        return this.freshTypeVar("recv_result");
+      }
+
+      case "SelectExpr": {
+        if (!this.isInAsync(env)) {
+          this.errors.push(new TypeCheckError(
+            "'select' can only be used inside an async function",
+            expr.span,
+          ));
+        }
+        let resultType: Type | null = null;
+        for (const arm of expr.arms) {
+          const armEnv = this.childEnv(env);
+          armEnv.inAsync = true;
+          if (arm.bindName) {
+            armEnv.variables.set(arm.bindName, this.freshTypeVar(arm.bindName));
+          }
+          const armType = this.inferExpr(arm.body, armEnv);
+          if (!resultType) resultType = armType;
+        }
+        return resultType ?? VOID;
+      }
+
+      case "TimeoutExpr": {
+        const durType = this.inferExpr(expr.duration, env);
+        if (durType.tag !== "primitive" || durType.name !== "Int") {
+          this.errors.push(new TypeCheckError(
+            `timeout duration must be Int, got ${this.typeToString(durType)}`,
+            expr.span,
+          ));
+        }
+        return VOID;
+      }
 
       case "AssertExpr": {
         const condType = this.inferExpr(expr.condition, env);
@@ -596,6 +697,15 @@ export class TypeChecker {
     return source.tag === target.tag;
   }
 
+  private isInAsync(env: TypeEnv): boolean {
+    let current: TypeEnv | undefined = env;
+    while (current) {
+      if (current.inAsync) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
   private freshTypeVar(name: string): TypeVar {
     return { tag: "typevar", name, id: this.nextTypeVarId++ };
   }
@@ -606,6 +716,8 @@ export class TypeChecker {
       types: new Map(),
       traits: new Map(),
       parent,
+      inAsync: parent.inAsync,
+      currentFnEffects: parent.currentFnEffects,
     };
   }
 
@@ -620,6 +732,7 @@ export class TypeChecker {
       case "map": return `Map<${this.typeToString(type.keyType)}, ${this.typeToString(type.valueType)}>`;
       case "option": return `Option<${this.typeToString(type.innerType)}>`;
       case "result": return `Result<${this.typeToString(type.okType)}, ${this.typeToString(type.errType)}>`;
+      case "channel": return `Channel<${this.typeToString(type.elementType)}>`;
       case "typevar": return type.resolved ? this.typeToString(type.resolved) : `?${type.name}`;
     }
   }

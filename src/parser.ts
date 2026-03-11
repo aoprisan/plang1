@@ -73,6 +73,20 @@ export class Parser {
     return this.expect(TokenType.Identifier);
   }
 
+  private expectMemberName(): Token {
+    const tok = this.current();
+    // Allow identifiers and keywords as member names (e.g., group.spawn, ch.send)
+    if (tok.type === TokenType.Identifier || tok.type === TokenType.Spawn ||
+        tok.type === TokenType.Send || tok.type === TokenType.Recv ||
+        tok.type === TokenType.Channel || tok.type === TokenType.Select ||
+        tok.type === TokenType.Timeout || tok.type === TokenType.Test ||
+        tok.type === TokenType.Type || tok.type === TokenType.Match ||
+        tok.type === TokenType.Self || tok.type === TokenType.As) {
+      return this.advance();
+    }
+    return this.expect(TokenType.Identifier);
+  }
+
   private parseImportDecl(): AST.ImportDecl {
     const start = this.current();
     this.expect(TokenType.Use);
@@ -554,11 +568,21 @@ export class Parser {
   }
 
   private parseEquality(): AST.Expr {
-    let left = this.parseComparison();
+    let left = this.parseRange();
     while (this.check(TokenType.EqEq) || this.check(TokenType.NotEq) || this.check(TokenType.TildeEq)) {
       const op = this.advance().value;
-      const right = this.parseComparison();
+      const right = this.parseRange();
       left = { kind: "BinaryExpr", operator: op, left, right, span: left.span };
+    }
+    return left;
+  }
+
+  private parseRange(): AST.Expr {
+    let left = this.parseComparison();
+    if (this.check(TokenType.DotDot)) {
+      this.advance();
+      const right = this.parseComparison();
+      return { kind: "RangeExpr", start: left, end: right, span: left.span };
     }
     return left;
   }
@@ -612,7 +636,7 @@ export class Parser {
   private parseCallExpr(expr: AST.Expr): AST.Expr {
     while (true) {
       if (this.match(TokenType.Dot)) {
-        const member = this.expect(TokenType.Identifier).value;
+        const member = this.expectMemberName().value;
         expr = { kind: "MemberExpr", object: expr, member, span: expr.span };
       } else if (this.check(TokenType.LParen)) {
         this.advance();
@@ -675,6 +699,14 @@ export class Parser {
     if (this.check(TokenType.Continue)) { this.advance(); return { kind: "ContinueExpr", span: this.spanFrom(start) }; }
     if (this.check(TokenType.Await)) return this.parseAwaitExpr();
     if (this.check(TokenType.Assert)) return this.parseAssertExpr();
+    if (this.check(TokenType.Channel)) return this.parseChannelExpr();
+    if (this.check(TokenType.Send)) return this.parseSendExpr();
+    if (this.check(TokenType.Recv)) return this.parseRecvExpr();
+    if (this.check(TokenType.Select)) return this.parseSelectExpr();
+    if (this.check(TokenType.Timeout)) return this.parseTimeoutExpr();
+
+    // task_group |name| { ... }
+    if (this.check(TokenType.TaskGroup)) return this.parseTaskGroupExpr();
 
     // Lambda: |params| body
     if (this.check(TokenType.Pipe) || this.check(TokenType.Or)) {
@@ -706,18 +738,6 @@ export class Parser {
       // Record constructor: Name { field: value, ... }
       if (this.check(TokenType.LBrace) && name[0] >= 'A' && name[0] <= 'Z') {
         return this.parseRecordExpr(name, start);
-      }
-
-      // Range expression: ident..expr
-      if (this.check(TokenType.DotDot)) {
-        this.advance();
-        const end = this.parseExpr();
-        return {
-          kind: "RangeExpr",
-          start: { kind: "Identifier", name, span: this.spanFrom(start) },
-          end,
-          span: this.spanFrom(start),
-        };
       }
 
       return { kind: "Identifier", name, span: this.spanFrom(start) };
@@ -907,6 +927,100 @@ export class Parser {
     return { kind: "AssertExpr", condition, span: this.spanFrom(start) };
   }
 
+  // task_group |name| { ... }
+  private parseTaskGroupExpr(): AST.TaskGroupExpr {
+    const start = this.current();
+    this.expect(TokenType.TaskGroup);
+    this.expect(TokenType.Pipe);
+    const paramName = this.expect(TokenType.Identifier).value;
+    this.expect(TokenType.Pipe);
+    const body = this.parseBlock();
+    return { kind: "TaskGroupExpr", paramName, body, span: this.spanFrom(start) };
+  }
+
+  // channel()  or  channel(10)
+  private parseChannelExpr(): AST.ChannelExpr {
+    const start = this.current();
+    this.expect(TokenType.Channel);
+    this.expect(TokenType.LParen);
+    let capacity: AST.Expr | undefined;
+    if (!this.check(TokenType.RParen)) {
+      capacity = this.parseExpr();
+    }
+    this.expect(TokenType.RParen);
+    return { kind: "ChannelExpr", capacity, span: this.spanFrom(start) };
+  }
+
+  // send(ch, value)
+  private parseSendExpr(): AST.SendExpr {
+    const start = this.current();
+    this.expect(TokenType.Send);
+    this.expect(TokenType.LParen);
+    const channel = this.parseExpr();
+    this.expect(TokenType.Comma);
+    const value = this.parseExpr();
+    this.expect(TokenType.RParen);
+    return { kind: "SendExpr", channel, value, span: this.spanFrom(start) };
+  }
+
+  // recv(ch)
+  private parseRecvExpr(): AST.RecvExpr {
+    const start = this.current();
+    this.expect(TokenType.Recv);
+    this.expect(TokenType.LParen);
+    const channel = this.parseExpr();
+    this.expect(TokenType.RParen);
+    return { kind: "RecvExpr", channel, span: this.spanFrom(start) };
+  }
+
+  // select { recv(ch) as msg => ..., send(ch, val) => ..., timeout(1000) => ... }
+  private parseSelectExpr(): AST.SelectExpr {
+    const start = this.current();
+    this.expect(TokenType.Select);
+    this.expect(TokenType.LBrace);
+    const arms: AST.SelectArm[] = [];
+    while (!this.check(TokenType.RBrace)) {
+      arms.push(this.parseSelectArm());
+      this.match(TokenType.Comma);
+    }
+    this.expect(TokenType.RBrace);
+    return { kind: "SelectExpr", arms, span: this.spanFrom(start) };
+  }
+
+  private parseSelectArm(): AST.SelectArm {
+    const start = this.current();
+    let operation: AST.SendExpr | AST.RecvExpr | AST.TimeoutExpr;
+    let bindName: string | undefined;
+
+    if (this.check(TokenType.Send)) {
+      operation = this.parseSendExpr();
+    } else if (this.check(TokenType.Recv)) {
+      operation = this.parseRecvExpr();
+      // optional: recv(ch) as name
+      if (this.match(TokenType.As)) {
+        bindName = this.expect(TokenType.Identifier).value;
+      }
+    } else if (this.check(TokenType.Timeout)) {
+      operation = this.parseTimeoutExpr();
+    } else {
+      throw new ParseError("Expected send, recv, or timeout in select arm", this.current());
+    }
+
+    this.expect(TokenType.FatArrow);
+    const body = this.parseExpr();
+    return { kind: "SelectArm", operation, bindName, body, span: this.spanFrom(start) };
+  }
+
+  // timeout(1000)
+  private parseTimeoutExpr(): AST.TimeoutExpr {
+    const start = this.current();
+    this.expect(TokenType.Timeout);
+    this.expect(TokenType.LParen);
+    const duration = this.parseExpr();
+    this.expect(TokenType.RParen);
+    return { kind: "TimeoutExpr", duration, span: this.spanFrom(start) };
+  }
+
   private parseLambdaExpr(): AST.LambdaExpr {
     const start = this.current();
     const params: AST.Param[] = [];
@@ -930,7 +1044,14 @@ export class Parser {
       returnType = this.parseTypeExpr();
     }
 
-    const body = this.parseBlock();
+    let body: AST.BlockExpr;
+    if (this.check(TokenType.LBrace)) {
+      body = this.parseBlock();
+    } else {
+      // Single-expression lambda: || expr
+      const expr = this.parseExpr();
+      body = { kind: "BlockExpr", statements: [], finalExpr: expr, span: expr.span };
+    }
     return { kind: "LambdaExpr", params, returnType, body, span: this.spanFrom(start) };
   }
 
