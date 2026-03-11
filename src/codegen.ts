@@ -8,6 +8,8 @@ export class CodeGenerator {
   private testNames: string[] = [];
   private mutualRecGroups: Set<string>[] = [];
   private trampolinedFns: Set<string> = new Set();
+  // Maps method name -> generated function name for trait impl methods with self
+  private traitMethods: Map<string, string> = new Map();
 
   generate(program: AST.Program): string {
     this.output = [];
@@ -31,6 +33,9 @@ export class CodeGenerator {
 
     // Analyze mutual tail recursion groups
     this.analyzeMutualRecursion(program.declarations);
+
+    // Register trait impl methods for method call dispatch
+    this.registerTraitMethods(program.declarations);
 
     // Declarations
     for (const decl of program.declarations) {
@@ -354,6 +359,20 @@ export class CodeGenerator {
     }
   }
 
+  private registerTraitMethods(declarations: AST.TopLevelDecl[]): void {
+    for (const decl of declarations) {
+      if (decl.kind === "ImplDecl") {
+        for (const method of decl.methods) {
+          const hasSelf = method.params.some(p => p.name === "self");
+          if (hasSelf) {
+            const fnName = `${decl.traitPath.join("_")}_${method.name}`;
+            this.traitMethods.set(method.name, fnName);
+          }
+        }
+      }
+    }
+  }
+
   private emitTraitDecl(decl: AST.TraitDecl): void {
     this.emit(`// trait: ${decl.name}`);
   }
@@ -368,8 +387,8 @@ export class CodeGenerator {
       const hasSelf = method.params.some(p => p.name === "self");
 
       if (hasSelf) {
-        // Instance method — add to prototype or as standalone
-        this.emit(`function ${decl.traitPath.join("_")}_${method.name}(__self${params ? ", " + params : ""}) {`);
+        // Instance method — self is a valid JS identifier
+        this.emit(`function ${decl.traitPath.join("_")}_${method.name}(self${params ? ", " + params : ""}) {`);
       } else {
         this.emit(`function ${decl.traitPath.join("_")}_${method.name}(${params}) {`);
       }
@@ -392,6 +411,24 @@ export class CodeGenerator {
     this.emitBlockBody(decl.body);
     this.indent--;
     this.emit("}");
+  }
+
+  // Map PLang member names to JavaScript equivalents
+  private mapMemberName(name: string): string {
+    switch (name) {
+      case "to_string": return "toString";
+      case "to_upper": return "toUpperCase";
+      case "to_lower": return "toLowerCase";
+      case "trim_start": return "trimStart";
+      case "trim_end": return "trimEnd";
+      case "starts_with": return "startsWith";
+      case "ends_with": return "endsWith";
+      case "index_of": return "indexOf";
+      case "last_index_of": return "lastIndexOf";
+      case "char_at": return "charAt";
+      case "to_fixed": return "toFixed";
+      default: return name;
+    }
   }
 
   private isOptionReturn(returnType?: AST.TypeExpr): boolean {
@@ -464,6 +501,15 @@ export class CodeGenerator {
         return `${expr.operator}${this.exprToJs(expr.operand)}`;
 
       case "CallExpr": {
+        // Trait method dispatch: obj.method(args) -> TraitName_method(obj, args)
+        if (expr.callee.kind === "MemberExpr") {
+          const traitFn = this.traitMethods.get(expr.callee.member);
+          if (traitFn) {
+            const obj = this.exprToJs(expr.callee.object);
+            const args = expr.args.map(a => this.exprToJs(a)).join(", ");
+            return `${traitFn}(${obj}${args ? ", " + args : ""})`;
+          }
+        }
         const callee = this.exprToJs(expr.callee);
         const args = expr.args.map(a => this.exprToJs(a)).join(", ");
         // Wrap calls to trampolined functions from outside their group
@@ -473,8 +519,11 @@ export class CodeGenerator {
         return `${callee}(${args})`;
       }
 
-      case "MemberExpr":
-        return `${this.exprToJs(expr.object)}.${expr.member}`;
+      case "MemberExpr": {
+        const obj = this.exprToJs(expr.object);
+        const member = this.mapMemberName(expr.member);
+        return `${obj}.${member}`;
+      }
 
       case "PropagateExpr":
         return `__propagate(${this.exprToJs(expr.expr)})`;
