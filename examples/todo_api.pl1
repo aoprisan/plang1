@@ -5,32 +5,28 @@
 //   npm install express better-sqlite3
 //   npx plang compile examples/todo_api.pl1
 //   node dist/todo_api.js
+//
+// Test with:
+//   curl localhost:3000/todos
+//   curl -X POST -H "Content-Type: application/json" -d '{"title":"Buy milk"}' localhost:3000/todos
+//   curl -X PUT -H "Content-Type: application/json" -d '{"title":"Buy milk","done":true}' localhost:3000/todos/1
+//   curl -X DELETE localhost:3000/todos/1
 
 module todo_api;
 
 // === FFI: External JavaScript bindings ===
 
-// Express.js web framework
 extern module "express" as express_mod {
+  // express() creates an app; the module itself is the callable
   fn create() -> Any = "default";
 }
 
-// SQLite database
 extern module "better-sqlite3" as sqlite_mod {
+  // better-sqlite3 exports a constructor directly
   fn open(path: Str) -> Any = "default";
 }
 
-// JSON helpers (built-in JS)
-extern fn json_parse(s: Str) -> Any = "JSON.parse";
 extern fn json_stringify(obj: Any) -> Str = "JSON.stringify";
-
-// === Types ===
-
-type Todo = {
-  id: Int,
-  title: Str,
-  done: Bool,
-};
 
 // === Database Layer ===
 
@@ -43,30 +39,25 @@ fn init_db(db: Any) -> Void {
 }
 
 fn get_all_todos(db: Any) -> Any {
-  let stmt = db.prepare("SELECT id, title, done FROM todos ORDER BY id");
-  stmt.all()
+  db.prepare("SELECT id, title, done FROM todos ORDER BY id").all()
 }
 
 fn get_todo(db: Any, id: Int) -> Any {
-  let stmt = db.prepare("SELECT id, title, done FROM todos WHERE id = ?");
-  stmt.get(id)
+  db.prepare("SELECT id, title, done FROM todos WHERE id = ?").get(id)
 }
 
 fn create_todo(db: Any, title: Str) -> Any {
-  let stmt = db.prepare("INSERT INTO todos (title) VALUES (?)");
-  let result = stmt.run(title);
+  let result = db.prepare("INSERT INTO todos (title) VALUES (?)").run(title);
   get_todo(db, result.lastInsertRowid)
 }
 
 fn update_todo(db: Any, id: Int, title: Str, done: Bool) -> Any {
-  let stmt = db.prepare("UPDATE todos SET title = ?, done = ? WHERE id = ?");
-  stmt.run(title, done, id);
+  db.prepare("UPDATE todos SET title = ?, done = ? WHERE id = ?").run(title, done, id);
   get_todo(db, id)
 }
 
 fn delete_todo(db: Any, id: Int) -> Void {
-  let stmt = db.prepare("DELETE FROM todos WHERE id = ?");
-  stmt.run(id);
+  db.prepare("DELETE FROM todos WHERE id = ?").run(id);
 }
 
 // === HTTP Routes ===
@@ -123,22 +114,20 @@ fn setup_routes(app: Any, db: Any) -> Void {
 // === Main ===
 
 fn main() -> Void {
-  // Initialize database
   let db = sqlite_mod.open("todos.db");
   init_db(db);
 
-  // Create Express app
   let app = express_mod.create();
   setup_routes(app, db);
 
-  // Start server
   let port = 3000;
   app.listen(port, || {
     println("Todo API running on http://localhost:3000");
-    println("  GET    /todos       — list all todos");
-    println("  POST   /todos       — create a todo");
-    println("  GET    /todos/:id   — get a todo");
-    println("  PUT    /todos/:id   — update a todo");
-    println("  DELETE /todos/:id   — delete a todo");
+    println("");
+    println("  GET    /todos       — list all");
+    println("  POST   /todos       — create");
+    println("  GET    /todos/:id   — get one");
+    println("  PUT    /todos/:id   — update");
+    println("  DELETE /todos/:id   — delete");
   });
 }

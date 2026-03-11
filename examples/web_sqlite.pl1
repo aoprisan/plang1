@@ -1,0 +1,119 @@
+// Simple Web App + SQLite — minimal example
+// Uses Node.js built-in http module + better-sqlite3
+//
+// To run:
+//   npm install better-sqlite3
+//   npx plang compile examples/web_sqlite.pl1
+//   node dist/web_sqlite.js
+//   curl http://localhost:8080/notes
+
+module web_sqlite;
+
+// === FFI bindings ===
+
+extern module "http" as http {
+  fn createServer(handler: Any) -> Any;
+}
+
+extern module "better-sqlite3" as sqlite {
+  fn open(path: Str) -> Any = "default";
+}
+
+extern fn json_stringify(val: Any) -> Str = "JSON.stringify";
+extern fn json_parse(val: Str) -> Any = "JSON.parse";
+extern fn parse_int(val: Str) -> Int = "parseInt";
+
+// === Database ===
+
+fn setup_db(db: Any) -> Void {
+  db.exec("CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT DEFAULT ''
+  )");
+}
+
+fn list_notes(db: Any) -> Any {
+  db.prepare("SELECT * FROM notes ORDER BY id").all()
+}
+
+fn add_note(db: Any, title: Str, body: Str) -> Any {
+  let info = db.prepare("INSERT INTO notes (title, body) VALUES (?, ?)").run(title, body);
+  db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid)
+}
+
+fn delete_note(db: Any, id: Int) -> Void {
+  db.prepare("DELETE FROM notes WHERE id = ?").run(id);
+}
+
+// === HTTP helpers ===
+
+fn send_json(res: Any, status: Int, data: Any) -> Void {
+  res.writeHead(status, { content_type: "application/json" });
+  res.end(json_stringify(data));
+}
+
+fn read_body(req: Any, callback: Any) -> Void {
+  let chunks = [];
+  req.on("data", |chunk: Any| {
+    chunks.push(chunk);
+  });
+  req.on("end", || {
+    let raw = chunks.join("");
+    callback(json_parse(raw));
+  });
+}
+
+// === Request handler ===
+
+fn handle_request(db: Any, req: Any, res: Any) -> Void {
+  let url = req.url;
+  let method = req.method;
+
+  if method == "GET" {
+    if url == "/notes" {
+      let notes = list_notes(db);
+      send_json(res, 200, notes);
+    } else {
+      send_json(res, 404, { error: "Not found" });
+    }
+  } else {
+    if method == "POST" {
+      if url == "/notes" {
+        read_body(req, |data: Any| {
+          let note = add_note(db, data.title, data.body);
+          send_json(res, 201, note);
+        });
+      } else {
+        send_json(res, 404, { error: "Not found" });
+      }
+    } else {
+      if method == "DELETE" {
+        let id = parse_int(url.replace("/notes/", ""));
+        delete_note(db, id);
+        send_json(res, 204, null);
+      } else {
+        send_json(res, 405, { error: "Method not allowed" });
+      }
+    }
+  };
+}
+
+// === Main ===
+
+fn main() -> Void {
+  let db = sqlite.open("notes.db");
+  setup_db(db);
+
+  let server = http.createServer(|req: Any, res: Any| {
+    handle_request(db, req, res);
+  });
+
+  server.listen(8080, || {
+    println("Notes API on http://localhost:8080");
+    println("");
+    println("  curl localhost:8080/notes");
+    println("  curl -X POST -d '{\"title\":\"Hello\",\"body\":\"World\"}' localhost:8080/notes");
+    println("  curl -X DELETE localhost:8080/notes/1");
+  });
+}

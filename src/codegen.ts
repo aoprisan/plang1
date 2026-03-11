@@ -373,10 +373,15 @@ export class CodeGenerator {
     for (const method of decl.methods) {
       const params = method.params.map(p => p.name).join(", ");
       const asyncPrefix = method.isAsync ? "async " : "";
-      // If jsBinding differs from method name, use the binding; otherwise use module method
-      const jsFn = method.jsBinding !== method.name
-        ? `__mod.${method.jsBinding}`
-        : `__mod.${method.name}`;
+      // "default" means the module export itself is the function (e.g., better-sqlite3)
+      let jsFn: string;
+      if (method.jsBinding === "default") {
+        jsFn = `__mod`;
+      } else if (method.jsBinding !== method.name) {
+        jsFn = `__mod.${method.jsBinding}`;
+      } else {
+        jsFn = `__mod.${method.name}`;
+      }
       this.emit(`${method.name}: ${asyncPrefix}(${params}) => ${jsFn}(${params}),`);
     }
     this.indent--;
@@ -397,6 +402,7 @@ export class CodeGenerator {
       case "StrLiteral": return JSON.stringify(expr.value);
       case "CharLiteral": return JSON.stringify(expr.value);
       case "BoolLiteral": return String(expr.value);
+      case "NullLiteral": return "null";
       case "Identifier": return expr.name;
 
       case "BinaryExpr": {
@@ -456,6 +462,12 @@ export class CodeGenerator {
 
       case "ListExpr":
         return `[${expr.elements.map(e => this.exprToJs(e)).join(", ")}]`;
+
+      case "ObjectLiteral": {
+        if (expr.fields.length === 0) return "{}";
+        const fields = expr.fields.map(f => `${f.name}: ${this.exprToJs(f.value)}`);
+        return `({ ${fields.join(", ")} })`;
+      }
 
       case "RecordExpr": {
         const fields = expr.fields.map(f => {

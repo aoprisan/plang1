@@ -199,6 +199,7 @@ export type Expr =
   | StrLiteral
   | CharLiteral
   | BoolLiteral
+  | NullLiteral
   | Identifier
   | BinaryExpr
   | UnaryExpr
@@ -212,6 +213,7 @@ export type Expr =
   | BlockExpr
   | LambdaExpr
   | ListExpr
+  | ObjectLiteral
   | RecordExpr
   | RecordUpdateExpr
   | PipeExpr
@@ -251,6 +253,10 @@ export interface CharLiteral extends BaseNode {
 export interface BoolLiteral extends BaseNode {
   kind: "BoolLiteral";
   value: boolean;
+}
+
+export interface NullLiteral extends BaseNode {
+  kind: "NullLiteral";
 }
 
 export interface Identifier extends BaseNode {
@@ -376,6 +382,11 @@ export interface LambdaExpr extends BaseNode {
 export interface ListExpr extends BaseNode {
   kind: "ListExpr";
   elements: Expr[];
+}
+
+export interface ObjectLiteral extends BaseNode {
+  kind: "ObjectLiteral";
+  fields: { name: string; value: Expr }[];
 }
 
 export interface RecordExpr extends BaseNode {

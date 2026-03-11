@@ -204,4 +204,113 @@ describe("FFI — End-to-End", () => {
     const fn = new Function("require", "module", "exports", result.js!);
     assert.ok(typeof fn === "function");
   });
+
+  it("extern module with default binding compiles to __mod()", () => {
+    const result = compile(`
+      module test;
+      extern module "better-sqlite3" as db {
+        fn open(path: Str) -> Any = "default";
+      }
+    `);
+    assert.ok(result.js);
+    assert.ok(result.js!.includes("__mod(path)"));
+    assert.ok(!result.js!.includes("__mod.default"));
+  });
+});
+
+describe("Null literal", () => {
+  it("parses null literal", () => {
+    const ast = parse(`
+      module test;
+      fn main() -> Void {
+        let x = null;
+      }
+    `);
+    assert.strictEqual(ast.declarations.length, 1);
+  });
+
+  it("compiles null to JS null", () => {
+    const js = generateJs(`
+      module test;
+      fn check(x: Any) -> Bool {
+        x == null
+      }
+    `);
+    assert.ok(js.includes("null"));
+  });
+});
+
+describe("Object literals", () => {
+  it("parses anonymous object literal", () => {
+    const ast = parse(`
+      module test;
+      fn main() -> Void {
+        let obj = { name: "hello", value: 42 };
+      }
+    `);
+    assert.strictEqual(ast.declarations.length, 1);
+  });
+
+  it("compiles object literal to JS", () => {
+    const js = generateJs(`
+      module test;
+      fn main() -> Any {
+        { name: "hello", count: 42 }
+      }
+    `);
+    assert.ok(js.includes("name:"));
+    assert.ok(js.includes('"hello"'));
+    assert.ok(js.includes("42"));
+  });
+
+  it("compiles empty object literal", () => {
+    const js = generateJs(`
+      module test;
+      fn main() -> Any {
+        let x = {};
+        x
+      }
+    `);
+    assert.ok(js.includes("{}"));
+  });
+
+  it("object literal in function call compiles", () => {
+    const result = compile(`
+      module test;
+      extern fn emit(data: Any) -> Void = "console.log";
+      fn main() -> Void {
+        emit({ error: "not found" });
+      }
+    `);
+    assert.ok(result.js);
+    assert.ok(result.js!.includes("error:"));
+  });
+});
+
+describe("Examples compile", () => {
+  it("todo_api.pl1 compiles", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync("examples/todo_api.pl1", "utf-8");
+    const result = compile(src);
+    assert.ok(result.js, "todo_api.pl1 should compile: " + (result.errors?.[0] || ""));
+    assert.ok(result.js!.includes('require("express")'));
+    assert.ok(result.js!.includes('require("better-sqlite3")'));
+  });
+
+  it("sqlite_demo.pl1 compiles", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync("examples/sqlite_demo.pl1", "utf-8");
+    const result = compile(src);
+    assert.ok(result.js, "sqlite_demo.pl1 should compile: " + (result.errors?.[0] || ""));
+    assert.ok(result.js!.includes('require("better-sqlite3")'));
+  });
+
+  it("web_sqlite.pl1 compiles", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync("examples/web_sqlite.pl1", "utf-8");
+    const result = compile(src);
+    assert.ok(result.js, "web_sqlite.pl1 should compile: " + (result.errors?.[0] || ""));
+    assert.ok(result.js!.includes('require("http")'));
+    assert.ok(result.js!.includes('require("better-sqlite3")'));
+  });
 });

@@ -351,6 +351,7 @@ export class TypeChecker {
       case "StrLiteral": return STR;
       case "CharLiteral": return CHAR;
       case "BoolLiteral": return BOOL;
+      case "NullLiteral": return ANY;
 
       case "Identifier": {
         const type = this.lookupVariable(expr.name, env, expr.span);
@@ -469,6 +470,14 @@ export class TypeChecker {
           this.inferExpr(expr.elements[i], env);
         }
         return { tag: "list", elementType: elemType };
+      }
+
+      case "ObjectLiteral": {
+        // Object literals are untyped — used for FFI interop
+        for (const f of expr.fields) {
+          this.inferExpr(f.value, env);
+        }
+        return ANY;
       }
 
       case "RecordExpr": {

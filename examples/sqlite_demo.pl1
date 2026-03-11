@@ -11,17 +11,9 @@ module sqlite_demo;
 // === FFI: SQLite bindings ===
 
 extern module "better-sqlite3" as Database {
+  // The module export itself is the constructor
   fn create(path: Str) -> Any = "default";
 }
-
-// === Types ===
-
-type User = {
-  id: Int,
-  name: Str,
-  email: Str,
-  age: Int,
-};
 
 // === Database operations ===
 
@@ -37,72 +29,56 @@ fn create_schema(db: Any) -> Void {
 }
 
 fn insert_user(db: Any, name: Str, email: Str, age: Int) -> Any {
-  let stmt = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
-  stmt.run(name, email, age)
+  db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)").run(name, email, age)
 }
 
 fn find_user_by_email(db: Any, email: Str) -> Any {
-  let stmt = db.prepare("SELECT * FROM users WHERE email = ?");
-  stmt.get(email)
+  db.prepare("SELECT * FROM users WHERE email = ?").get(email)
 }
 
 fn all_users(db: Any) -> Any {
-  let stmt = db.prepare("SELECT * FROM users ORDER BY name");
-  stmt.all()
+  db.prepare("SELECT * FROM users ORDER BY name").all()
 }
 
 fn users_older_than(db: Any, min_age: Int) -> Any {
-  let stmt = db.prepare("SELECT * FROM users WHERE age > ? ORDER BY age");
-  stmt.all(min_age)
+  db.prepare("SELECT * FROM users WHERE age > ? ORDER BY age").all(min_age)
 }
 
 fn update_user_age(db: Any, email: Str, new_age: Int) -> Void {
-  let stmt = db.prepare("UPDATE users SET age = ? WHERE email = ?");
-  stmt.run(new_age, email);
+  db.prepare("UPDATE users SET age = ? WHERE email = ?").run(new_age, email);
 }
 
 fn delete_user(db: Any, email: Str) -> Void {
-  let stmt = db.prepare("DELETE FROM users WHERE email = ?");
-  stmt.run(email);
+  db.prepare("DELETE FROM users WHERE email = ?").run(email);
 }
 
 fn count_users(db: Any) -> Int {
-  let stmt = db.prepare("SELECT COUNT(*) as count FROM users");
-  let row = stmt.get();
+  let row = db.prepare("SELECT COUNT(*) as count FROM users").get();
   row.count
 }
 
 // === Transaction example ===
 
-fn batch_insert(db: Any) -> Void {
-  // Use a transaction for bulk inserts
+fn seed_users(db: Any) -> Void {
   let insert = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
 
-  let tx = db.transaction(|users: Any| {
-    for user in users {
-      insert.run(user.name, user.email, user.age);
-    };
-  });
-
-  tx([
-    { name: "Alice",   email: "alice@example.com",   age: 30 },
-    { name: "Bob",     email: "bob@example.com",     age: 25 },
-    { name: "Charlie", email: "charlie@example.com", age: 35 },
-    { name: "Diana",   email: "diana@example.com",   age: 28 },
-    { name: "Eve",     email: "eve@example.com",     age: 42 },
-  ]);
+  insert.run("Alice",   "alice@example.com",   30);
+  insert.run("Bob",     "bob@example.com",     25);
+  insert.run("Charlie", "charlie@example.com", 35);
+  insert.run("Diana",   "diana@example.com",   28);
+  insert.run("Eve",     "eve@example.com",     42);
 }
 
 // === Main ===
 
 fn main() -> Void {
-  // Open in-memory database (use ":memory:" for testing, file path for persistence)
+  // In-memory database for demo (use a file path for persistence)
   let db = Database.create(":memory:");
   create_schema(db);
 
-  // Bulk insert
+  // Insert users
   println("Inserting users...");
-  batch_insert(db);
+  seed_users(db);
 
   // Count
   let total = count_users(db);

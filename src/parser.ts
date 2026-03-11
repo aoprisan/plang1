@@ -75,13 +75,14 @@ export class Parser {
 
   private expectMemberName(): Token {
     const tok = this.current();
-    // Allow identifiers and keywords as member names (e.g., group.spawn, ch.send)
-    if (tok.type === TokenType.Identifier || tok.type === TokenType.Spawn ||
-        tok.type === TokenType.Send || tok.type === TokenType.Recv ||
-        tok.type === TokenType.Channel || tok.type === TokenType.Select ||
-        tok.type === TokenType.Timeout || tok.type === TokenType.Test ||
-        tok.type === TokenType.Type || tok.type === TokenType.Match ||
-        tok.type === TokenType.Self || tok.type === TokenType.As) {
+    // Allow identifiers and any keyword as member names (e.g., app.use, app.delete, ch.send)
+    if (tok.type === TokenType.Identifier || tok.type === TokenType.EOF) {
+      return tok.type === TokenType.EOF
+        ? this.expect(TokenType.Identifier)
+        : this.advance();
+    }
+    // Any keyword can be used as a member name after '.'
+    if (tok.value && /^[a-zA-Z_]/.test(tok.value)) {
       return this.advance();
     }
     return this.expect(TokenType.Identifier);
@@ -786,6 +787,10 @@ export class Parser {
       this.advance();
       return { kind: "BoolLiteral", value: false, span: this.spanFrom(start) };
     }
+    if (this.check(TokenType.Null)) {
+      this.advance();
+      return { kind: "NullLiteral", span: this.spanFrom(start) };
+    }
 
     // Control flow expressions
     if (this.check(TokenType.If)) return this.parseIfExpr();
@@ -824,8 +829,12 @@ export class Parser {
       return expr;
     }
 
-    // Block expression
+    // Object literal or block expression
     if (this.check(TokenType.LBrace)) {
+      // Lookahead: { identifier : ... } is an object literal
+      if (this.isObjectLiteral()) {
+        return this.parseObjectLiteral();
+      }
       return this.parseBlock();
     }
 
@@ -1166,6 +1175,49 @@ export class Parser {
     }
     this.expect(TokenType.RBracket);
     return { kind: "ListExpr", elements, span: this.spanFrom(start) };
+  }
+
+  // Lookahead: is this { identifier: expr, ... } (object literal)?
+  private isObjectLiteral(): boolean {
+    // Save position for lookahead
+    const saved = this.pos;
+    try {
+      if (!this.check(TokenType.LBrace)) return false;
+      this.advance(); // skip {
+
+      // Empty braces {} — treat as empty object literal
+      if (this.check(TokenType.RBrace)) return true;
+
+      // Check for identifier followed by colon
+      if (this.check(TokenType.Identifier)) {
+        this.advance();
+        return this.check(TokenType.Colon);
+      }
+      return false;
+    } finally {
+      this.pos = saved;
+    }
+  }
+
+  private parseObjectLiteral(): AST.ObjectLiteral {
+    const start = this.current();
+    this.expect(TokenType.LBrace);
+    const fields: { name: string; value: AST.Expr }[] = [];
+    if (!this.check(TokenType.RBrace)) {
+      const name = this.expect(TokenType.Identifier).value;
+      this.expect(TokenType.Colon);
+      const value = this.parseExpr();
+      fields.push({ name, value });
+      while (this.match(TokenType.Comma)) {
+        if (this.check(TokenType.RBrace)) break;
+        const fname = this.expect(TokenType.Identifier).value;
+        this.expect(TokenType.Colon);
+        const fvalue = this.parseExpr();
+        fields.push({ name: fname, value: fvalue });
+      }
+    }
+    this.expect(TokenType.RBrace);
+    return { kind: "ObjectLiteral", fields, span: this.spanFrom(start) };
   }
 
   private parseRecordExpr(typeName: string, start: Token): AST.RecordExpr {
