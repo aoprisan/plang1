@@ -11,10 +11,14 @@
     "test": "node --test dist/tests/*.test.js",
     "start": "node dist/cli.js"
   },
-  "keywords": ["programming-language", "transpiler", "ai-optimized"],
+  "keywords": [
+    "programming-language",
+    "transpiler",
+    "ai-optimized"
+  ],
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.11.0"
+    "@types/node": "^20.19.37",
+    "typescript": "^5.4.0"
   }
 }
