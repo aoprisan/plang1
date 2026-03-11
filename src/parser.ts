@@ -422,10 +422,43 @@ export class Parser {
     this.expect(TokenType.LBrace);
     const methods: AST.FnDecl[] = [];
     while (!this.check(TokenType.RBrace)) {
-      methods.push(this.parseFnDecl(false));
+      methods.push(this.parseTraitMethodSig());
     }
     this.expect(TokenType.RBrace);
     return { kind: "TraitDecl", name, isPublic, typeParams, methods, span: this.spanFrom(start) };
+  }
+
+  private parseTraitMethodSig(): AST.FnDecl {
+    const start = this.current();
+    const isAsync = this.match(TokenType.Async);
+    this.expect(TokenType.Fn);
+    const name = this.expect(TokenType.Identifier).value;
+    const typeParams = this.check(TokenType.Lt) ? this.parseTypeParams() : [];
+    this.expect(TokenType.LParen);
+    const params = this.parseParamList();
+    this.expect(TokenType.RParen);
+
+    let returnType: AST.TypeExpr | undefined;
+    let effects: AST.TypeExpr[] = [];
+    if (this.match(TokenType.Arrow)) {
+      returnType = this.parseTypeExpr();
+      if (this.match(TokenType.Bang)) {
+        effects = this.parseEffectTypes();
+      }
+    }
+
+    // Trait methods can be signatures (ending with ;) or have default bodies
+    let body: AST.BlockExpr | undefined;
+    if (this.check(TokenType.LBrace)) {
+      body = this.parseBlock();
+    } else {
+      this.expect(TokenType.Semicolon);
+    }
+
+    return {
+      kind: "FnDecl", name, isPublic: false, isAsync, typeParams, params,
+      returnType, effects, body, span: this.spanFrom(start),
+    };
   }
 
   private parseImplDecl(): AST.ImplDecl {
@@ -560,8 +593,12 @@ export class Parser {
     this.expect(TokenType.RParen);
 
     let returnType: AST.TypeExpr | undefined;
+    let effects: AST.TypeExpr[] = [];
     if (this.match(TokenType.Arrow)) {
       returnType = this.parseTypeExpr();
+      if (this.match(TokenType.Bang)) {
+        effects = this.parseEffectTypes();
+      }
     }
 
     this.expect(TokenType.Eq);
@@ -570,7 +607,7 @@ export class Parser {
 
     return {
       kind: "ExternFnDecl", name, isPublic, isAsync, params, returnType,
-      jsBinding, span: this.spanFrom(start),
+      effects, jsBinding, span: this.spanFrom(start),
     };
   }
 
@@ -598,8 +635,12 @@ export class Parser {
       this.expect(TokenType.RParen);
 
       let returnType: AST.TypeExpr | undefined;
+      let effects: AST.TypeExpr[] = [];
       if (this.match(TokenType.Arrow)) {
         returnType = this.parseTypeExpr();
+        if (this.match(TokenType.Bang)) {
+          effects = this.parseEffectTypes();
+        }
       }
 
       // Optional JS binding override: = "customName"
@@ -611,7 +652,7 @@ export class Parser {
 
       methods.push({
         kind: "ExternFnDecl", name: methodName, isPublic: false, isAsync, params,
-        returnType, jsBinding, span: this.spanFrom(methodStart),
+        returnType, effects, jsBinding, span: this.spanFrom(methodStart),
       });
     }
     this.expect(TokenType.RBrace);
@@ -823,8 +864,22 @@ export class Parser {
 
     // Grouped expression or tuple
     if (this.check(TokenType.LParen)) {
+      const start = this.current();
       this.advance();
       const expr = this.parseExpr();
+      if (this.match(TokenType.Comma)) {
+        // Tuple: (expr, expr, ...)
+        const elements: AST.Expr[] = [expr];
+        if (!this.check(TokenType.RParen)) {
+          elements.push(this.parseExpr());
+          while (this.match(TokenType.Comma)) {
+            if (this.check(TokenType.RParen)) break;
+            elements.push(this.parseExpr());
+          }
+        }
+        this.expect(TokenType.RParen);
+        return { kind: "TupleExpr", elements, span: this.spanFrom(start) } as AST.TupleExpr;
+      }
       this.expect(TokenType.RParen);
       return expr;
     }
@@ -848,6 +903,12 @@ export class Parser {
       }
 
       return { kind: "Identifier", name, span: this.spanFrom(start) };
+    }
+
+    // self keyword used as expression (in impl methods)
+    if (this.check(TokenType.Self)) {
+      this.advance();
+      return { kind: "Identifier", name: "self", span: this.spanFrom(start) };
     }
 
     throw new ParseError("Expected expression", this.current());
@@ -1138,9 +1199,9 @@ export class Parser {
     } else {
       this.expect(TokenType.Pipe);
       if (!this.check(TokenType.Pipe)) {
-        params.push(this.parseParam());
+        params.push(this.parseLambdaParam());
         while (this.match(TokenType.Comma)) {
-          params.push(this.parseParam());
+          params.push(this.parseLambdaParam());
         }
       }
       this.expect(TokenType.Pipe);
@@ -1160,6 +1221,20 @@ export class Parser {
       body = { kind: "BlockExpr", statements: [], finalExpr: expr, span: expr.span };
     }
     return { kind: "LambdaExpr", params, returnType, body, span: this.spanFrom(start) };
+  }
+
+  // Parse lambda parameter with optional type annotation: name or name: Type
+  private parseLambdaParam(): AST.Param {
+    const start = this.current();
+    const name = this.expect(TokenType.Identifier).value;
+    let type: AST.TypeExpr;
+    if (this.match(TokenType.Colon)) {
+      type = this.parseTypeExpr();
+    } else {
+      // Infer type — use Any as placeholder
+      type = { kind: "NamedType", name: "Any", typeArgs: [], span: this.spanFrom(start) };
+    }
+    return { kind: "Param", name, type, span: this.spanFrom(start) };
   }
 
   private parseListExpr(): AST.ListExpr {
@@ -1281,6 +1356,9 @@ export class Parser {
         statements.push({ kind: "ExprStmt", expr, span: expr.span });
       } else if (this.check(TokenType.RBrace)) {
         finalExpr = expr;
+      } else if (this.isBlockExpr(expr)) {
+        // Block-bodied expressions (for, if, match, while) don't need semicolons
+        statements.push({ kind: "ExprStmt", expr, span: expr.span });
       } else {
         // Could be a statement missing semicolon — error
         throw new ParseError("Expected ';' or '}'", this.current());
@@ -1289,6 +1367,13 @@ export class Parser {
 
     this.expect(TokenType.RBrace);
     return { kind: "BlockExpr", statements, finalExpr, span: this.spanFrom(start) };
+  }
+
+  // Check if an expression is a block-bodied construct that doesn't need a semicolon
+  private isBlockExpr(expr: AST.Expr): boolean {
+    return expr.kind === "ForExpr" || expr.kind === "IfExpr" ||
+           expr.kind === "MatchExpr" || expr.kind === "WhileExpr" ||
+           expr.kind === "BlockExpr";
   }
 
   // === Helper Methods ===

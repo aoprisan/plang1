@@ -1,5 +1,6 @@
 // SQLite Demo — Shows FFI with better-sqlite3
 // Demonstrates Option<T> for safe nullable result handling
+// and the effect system for tracking database errors
 //
 // To run:
 //   npm install better-sqlite3
@@ -11,12 +12,12 @@ module sqlite_demo;
 // === FFI: SQLite bindings ===
 
 extern module "better-sqlite3" as Database {
-  fn create(path: Str) -> Any = "default";
+  fn create(path: Str) -> Any ! DbError = "default";
 }
 
 // === Database operations ===
 
-fn create_schema(db: Any) -> Void {
+fn create_schema(db: Any) -> Void ! DbError {
   db.exec("
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,39 +28,39 @@ fn create_schema(db: Any) -> Void {
   ");
 }
 
-fn insert_user(db: Any, name: Str, email: Str, age: Int) -> Any {
+fn insert_user(db: Any, name: Str, email: Str, age: Int) -> Any ! DbError {
   db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)").run(name, email, age)
 }
 
 // Returns Option — .get() returns null when no row matches
-fn find_user_by_email(db: Any, email: Str) -> Option<Any> {
+fn find_user_by_email(db: Any, email: Str) -> Option<Any> ! DbError {
   to_option(db.prepare("SELECT * FROM users WHERE email = ?").get(email))
 }
 
-fn all_users(db: Any) -> Any {
+fn all_users(db: Any) -> Any ! DbError {
   db.prepare("SELECT * FROM users ORDER BY name").all()
 }
 
-fn users_older_than(db: Any, min_age: Int) -> Any {
+fn users_older_than(db: Any, min_age: Int) -> Any ! DbError {
   db.prepare("SELECT * FROM users WHERE age > ? ORDER BY age").all(min_age)
 }
 
-fn update_user_age(db: Any, email: Str, new_age: Int) -> Void {
+fn update_user_age(db: Any, email: Str, new_age: Int) -> Void ! DbError {
   db.prepare("UPDATE users SET age = ? WHERE email = ?").run(new_age, email);
 }
 
-fn delete_user(db: Any, email: Str) -> Void {
+fn delete_user(db: Any, email: Str) -> Void ! DbError {
   db.prepare("DELETE FROM users WHERE email = ?").run(email);
 }
 
-fn count_users(db: Any) -> Int {
+fn count_users(db: Any) -> Int ! DbError {
   let row = db.prepare("SELECT COUNT(*) as count FROM users").get();
   row.count
 }
 
 // === Seed data ===
 
-fn seed_users(db: Any) -> Void {
+fn seed_users(db: Any) -> Void ! DbError {
   let insert = db.prepare("INSERT INTO users (name, email, age) VALUES (?, ?, ?)");
 
   insert.run("Alice",   "alice@example.com",   30);
@@ -71,7 +72,7 @@ fn seed_users(db: Any) -> Void {
 
 // === Main ===
 
-fn main() -> Void {
+fn main() -> Void ! DbError | IoError {
   let db = Database.create(":memory:");
   create_schema(db);
 

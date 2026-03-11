@@ -1,5 +1,6 @@
 // Simple Web App + SQLite — minimal example
 // Uses Node.js built-in http module + better-sqlite3
+// Demonstrates effect annotations for tracking DB and I/O errors
 //
 // To run:
 //   npm install better-sqlite3
@@ -16,7 +17,7 @@ extern module "http" as http {
 }
 
 extern module "better-sqlite3" as sqlite {
-  fn open(path: Str) -> Any = "default";
+  fn open(path: Str) -> Any ! DbError = "default";
 }
 
 extern fn json_stringify(val: Any) -> Str = "JSON.stringify";
@@ -25,7 +26,7 @@ extern fn parse_int(val: Str) -> Int = "parseInt";
 
 // === Database ===
 
-fn setup_db(db: Any) -> Void {
+fn setup_db(db: Any) -> Void ! DbError {
   db.exec("CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -33,16 +34,16 @@ fn setup_db(db: Any) -> Void {
   )");
 }
 
-fn list_notes(db: Any) -> Any {
+fn list_notes(db: Any) -> Any ! DbError {
   db.prepare("SELECT * FROM notes ORDER BY id").all()
 }
 
-fn add_note(db: Any, title: Str, body: Str) -> Any {
+fn add_note(db: Any, title: Str, body: Str) -> Any ! DbError {
   let info = db.prepare("INSERT INTO notes (title, body) VALUES (?, ?)").run(title, body);
   db.prepare("SELECT * FROM notes WHERE id = ?").get(info.lastInsertRowid)
 }
 
-fn delete_note(db: Any, id: Int) -> Void {
+fn delete_note(db: Any, id: Int) -> Void ! DbError {
   db.prepare("DELETE FROM notes WHERE id = ?").run(id);
 }
 
@@ -66,7 +67,7 @@ fn read_body(req: Any, callback: Any) -> Void {
 
 // === Request handler ===
 
-fn handle_request(db: Any, req: Any, res: Any) -> Void {
+fn handle_request(db: Any, req: Any, res: Any) -> Void ! DbError {
   let url = req.url;
   let method = req.method;
 
@@ -101,7 +102,7 @@ fn handle_request(db: Any, req: Any, res: Any) -> Void {
 
 // === Main ===
 
-fn main() -> Void {
+fn main() -> Void ! DbError | IoError {
   let db = sqlite.open("notes.db");
   setup_db(db);
 

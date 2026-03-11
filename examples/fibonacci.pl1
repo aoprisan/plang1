@@ -30,7 +30,7 @@ fn main() -> Void ! IoError {
   println("Tail-recursive:")!;
   for i in 0..10 {
     println(fib_tail(i, 0, 1).to_string())!;
-  }
+  };
 }
 
 test "fibonacci correctness" {

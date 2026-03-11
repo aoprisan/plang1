@@ -8,6 +8,8 @@ export class CodeGenerator {
   private testNames: string[] = [];
   private mutualRecGroups: Set<string>[] = [];
   private trampolinedFns: Set<string> = new Set();
+  // Maps method name -> generated function name for trait impl methods with self
+  private traitMethods: Map<string, string> = new Map();
 
   generate(program: AST.Program): string {
     this.output = [];
@@ -31,6 +33,9 @@ export class CodeGenerator {
 
     // Analyze mutual tail recursion groups
     this.analyzeMutualRecursion(program.declarations);
+
+    // Register trait impl methods for method call dispatch
+    this.registerTraitMethods(program.declarations);
 
     // Declarations
     for (const decl of program.declarations) {
@@ -93,6 +98,12 @@ export class CodeGenerator {
     this.emit("  if (result && result.__tag === 'Err') throw new __PLangError('propagate', result.error);");
     this.emit("  if (result && result.__tag === 'Ok') return result.value;");
     this.emit("  return result;");
+    this.emit("}");
+    this.emit("");
+    // Wrap effectful function calls: catches __PLangError and returns Result
+    this.emit("function __tryCall(fn, ...args) {");
+    this.emit("  try { return __ok(fn(...args)); }");
+    this.emit("  catch (e) { if (e instanceof __PLangError) return __err(e.data); throw e; }");
     this.emit("}");
     this.emit("");
     this.emit("function __range(start, end) {");
@@ -258,12 +269,53 @@ export class CodeGenerator {
     this.emit("    ceil: Math.ceil,");
     this.emit("    round: Math.round,");
     this.emit("  },");
+    this.emit("  net: { http: {");
+    this.emit("    serve: (addr, handler) => {");
+    this.emit("      const [host, port] = addr.includes(':') ? [addr.split(':')[0] || '0.0.0.0', parseInt(addr.split(':')[1])] : ['0.0.0.0', parseInt(addr)];");
+    this.emit("      const server = require('http').createServer((req, res) => {");
+    this.emit("        let body = '';");
+    this.emit("        req.on('data', c => body += c);");
+    this.emit("        req.on('end', () => {");
+    this.emit("          const plReq = { __type: 'Request', method: req.method, path: req.url, headers: new Map(Object.entries(req.headers)), body };");
+    this.emit("          const plRes = handler(plReq);");
+    this.emit("          if (plRes && plRes.status) {");
+    this.emit("            const hdrs = {};");
+    this.emit("            if (plRes.headers instanceof Map) plRes.headers.forEach((v, k) => hdrs[k] = v);");
+    this.emit("            res.writeHead(plRes.status, hdrs);");
+    this.emit("            res.end(plRes.body || '');");
+    this.emit("          } else { res.writeHead(500); res.end(); }");
+    this.emit("        });");
+    this.emit("      });");
+    this.emit("      server.listen(port, host);");
+    this.emit("      return __ok(undefined);");
+    this.emit("    },");
+    this.emit("  }},");
     this.emit("};");
     this.emit("");
     // Global convenience
     this.emit("const println = std.io.println;");
     this.emit("const math = std.math;");
+    this.emit("const http = std.net && std.net.http;");
     this.emit("const to_option = __wrapOption;");
+    this.emit("");
+    // Constructor aliases for Result/Option
+    this.emit("const Ok = __ok;");
+    this.emit("const Err = __err;");
+    this.emit("");
+    // Map helpers
+    this.emit("const __Map = {");
+    this.emit("  of: (entries) => new Map(entries),");
+    this.emit("  empty: () => new Map(),");
+    this.emit("};");
+    this.emit("if (typeof Map.of === 'undefined') Map.of = __Map.of;");
+    this.emit("if (typeof Map.empty === 'undefined') Map.empty = __Map.empty;");
+    this.emit("");
+    // Collection helpers (used by pipe operator)
+    this.emit("function filter(arr, fn) { return arr.filter(fn); }");
+    this.emit("function first(arr) { return arr.length > 0 ? __some(arr[0]) : __none; }");
+    this.emit("function map(arr, fn) { return arr.map(fn); }");
+    this.emit("function reduce(arr, fn, init) { return arr.reduce(fn, init); }");
+    this.emit("function find(arr, fn) { const r = arr.find(fn); return r !== undefined ? __some(r) : __none; }");
     this.emit("");
   }
 
@@ -286,6 +338,9 @@ export class CodeGenerator {
   }
 
   private emitFnDecl(decl: AST.FnDecl): void {
+    // Trait method signatures have no body — skip code generation
+    if (!decl.body) return;
+
     const asyncPrefix = decl.isAsync ? "async " : "";
     const params = decl.params.map(p => p.name).join(", ");
     const paramNames = decl.params.map(p => p.name);
@@ -351,6 +406,20 @@ export class CodeGenerator {
     }
   }
 
+  private registerTraitMethods(declarations: AST.TopLevelDecl[]): void {
+    for (const decl of declarations) {
+      if (decl.kind === "ImplDecl") {
+        for (const method of decl.methods) {
+          const hasSelf = method.params.some(p => p.name === "self");
+          if (hasSelf) {
+            const fnName = `${decl.traitPath.join("_")}_${method.name}`;
+            this.traitMethods.set(method.name, fnName);
+          }
+        }
+      }
+    }
+  }
+
   private emitTraitDecl(decl: AST.TraitDecl): void {
     this.emit(`// trait: ${decl.name}`);
   }
@@ -365,13 +434,13 @@ export class CodeGenerator {
       const hasSelf = method.params.some(p => p.name === "self");
 
       if (hasSelf) {
-        // Instance method — add to prototype or as standalone
-        this.emit(`function ${decl.traitPath.join("_")}_${method.name}(__self${params ? ", " + params : ""}) {`);
+        // Instance method — self is a valid JS identifier
+        this.emit(`function ${decl.traitPath.join("_")}_${method.name}(self${params ? ", " + params : ""}) {`);
       } else {
         this.emit(`function ${decl.traitPath.join("_")}_${method.name}(${params}) {`);
       }
       this.indent++;
-      this.emitBlockBody(method.body);
+      if (method.body) this.emitBlockBody(method.body);
       this.indent--;
       this.emit("}");
     }
@@ -389,6 +458,24 @@ export class CodeGenerator {
     this.emitBlockBody(decl.body);
     this.indent--;
     this.emit("}");
+  }
+
+  // Map PLang member names to JavaScript equivalents
+  private mapMemberName(name: string): string {
+    switch (name) {
+      case "to_string": return "toString";
+      case "to_upper": return "toUpperCase";
+      case "to_lower": return "toLowerCase";
+      case "trim_start": return "trimStart";
+      case "trim_end": return "trimEnd";
+      case "starts_with": return "startsWith";
+      case "ends_with": return "endsWith";
+      case "index_of": return "indexOf";
+      case "last_index_of": return "lastIndexOf";
+      case "char_at": return "charAt";
+      case "to_fixed": return "toFixed";
+      default: return name;
+    }
   }
 
   private isOptionReturn(returnType?: AST.TypeExpr): boolean {
@@ -461,6 +548,15 @@ export class CodeGenerator {
         return `${expr.operator}${this.exprToJs(expr.operand)}`;
 
       case "CallExpr": {
+        // Trait method dispatch: obj.method(args) -> TraitName_method(obj, args)
+        if (expr.callee.kind === "MemberExpr") {
+          const traitFn = this.traitMethods.get(expr.callee.member);
+          if (traitFn) {
+            const obj = this.exprToJs(expr.callee.object);
+            const args = expr.args.map(a => this.exprToJs(a)).join(", ");
+            return `${traitFn}(${obj}${args ? ", " + args : ""})`;
+          }
+        }
         const callee = this.exprToJs(expr.callee);
         const args = expr.args.map(a => this.exprToJs(a)).join(", ");
         // Wrap calls to trampolined functions from outside their group
@@ -470,8 +566,11 @@ export class CodeGenerator {
         return `${callee}(${args})`;
       }
 
-      case "MemberExpr":
-        return `${this.exprToJs(expr.object)}.${expr.member}`;
+      case "MemberExpr": {
+        const obj = this.exprToJs(expr.object);
+        const member = this.mapMemberName(expr.member);
+        return `${obj}.${member}`;
+      }
 
       case "PropagateExpr":
         return `__propagate(${this.exprToJs(expr.expr)})`;
@@ -509,6 +608,9 @@ export class CodeGenerator {
       }
 
       case "ListExpr":
+        return `[${expr.elements.map(e => this.exprToJs(e)).join(", ")}]`;
+
+      case "TupleExpr":
         return `[${expr.elements.map(e => this.exprToJs(e)).join(", ")}]`;
 
       case "ObjectLiteral": {
@@ -603,8 +705,26 @@ export class CodeGenerator {
   }
 
   private matchToJs(expr: AST.MatchExpr): string {
-    const subject = this.exprToJs(expr.subject);
+    let subject = this.exprToJs(expr.subject);
     const tempVar = `__match_${Math.floor(Math.random() * 10000)}`;
+
+    // If matching on Ok/Err and subject is a function call, wrap with __tryCall
+    // to catch PLangErrors and return Result
+    const hasResultArms = expr.arms.some(arm =>
+      arm.pattern.kind === "VariantPattern" && (arm.pattern.name === "Ok" || arm.pattern.name === "Err")
+    );
+    if (hasResultArms && expr.subject.kind === "CallExpr") {
+      if (expr.subject.callee.kind === "MemberExpr") {
+        const obj = this.exprToJs(expr.subject.callee.object);
+        const member = this.mapMemberName(expr.subject.callee.member);
+        const args = expr.subject.args.map(a => this.exprToJs(a)).join(", ");
+        subject = `__tryCall(${obj}.${member}.bind(${obj})${args ? ", " + args : ""})`;
+      } else {
+        const callee = this.exprToJs(expr.subject.callee);
+        const args = expr.subject.args.map(a => this.exprToJs(a)).join(", ");
+        subject = `__tryCall(${callee}${args ? ", " + args : ""})`;
+      }
+    }
 
     const arms = expr.arms.map(arm => {
       const { condition, bindings } = this.patternToCondition(arm.pattern, tempVar);
@@ -815,6 +935,7 @@ export class CodeGenerator {
     const tailCallGraph = new Map<string, Set<string>>();
     for (const decl of fnDecls) {
       const targets = new Set<string>();
+      if (!decl.body) continue;
       if (decl.body.finalExpr) this.findTailCallTargets(decl.body.finalExpr, targets);
       for (const stmt of decl.body.statements) {
         if (stmt.kind === "ExprStmt" && stmt.expr.kind === "ReturnExpr" && stmt.expr.value) {

@@ -42,7 +42,7 @@ fn main() -> Void ! IoError {
 
   for shape in shapes {
     println(describe(shape) ++ " — area: " ++ shape.area().to_string())!;
-  }
+  };
 }
 
 test "circle area" {
